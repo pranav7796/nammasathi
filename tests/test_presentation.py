@@ -108,3 +108,10 @@ def test_blocked_cart_explains_itself(issue: str) -> None:
     text = response_text([say], language="en-IN", commerce_mode="swiggy")
     assert _PHRASES["en-IN"][f"issue_{issue}"] in text
     assert "Shall I" not in text
+
+
+def test_filler_is_dropped_when_there_is_a_real_answer() -> None:
+    text = response_text(
+        [Say("filler_search"), Say("ask_what_to_add")], language="en-IN", commerce_mode="swiggy"
+    )
+    assert text == _PHRASES["en-IN"]["ask_what_to_add"]

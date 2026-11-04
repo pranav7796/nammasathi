@@ -213,3 +213,11 @@ def test_voice_lists_are_limited_and_sponsored_results_come_last() -> None:
     assert outcome.clarification is not None
     assert len(outcome.clarification.options) == MAX_OPTIONS
     assert "ad1" not in [o.spin_id for o in outcome.clarification.options]
+
+
+def test_pack_choice_keeps_relevance_order_and_offers_small_packs_first() -> None:
+    plain = p("s1", "Tata Salt", v("s1b", "1 kg"), v("s1a", "500 g"))
+    niche = p("s2", "Salt Grinder", v("s2a", "100 g"))
+    outcome = resolve_item(RequestedItem("salt", 1, None, "salt"), result(plain, niche))
+    assert outcome.clarification is not None
+    assert [o.spin_id for o in outcome.clarification.options][:2] == ["s1a", "s2a"]

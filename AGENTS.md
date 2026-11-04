@@ -13,8 +13,10 @@ The project is being built for the Gnani AI Great Indian AI Internship
 Challenge. The stated submission deadline is **10 November 2026, 11:59
 PM IST**.
 
-The immediate milestone is a reliable, demonstrable local MVP. Do not
-confuse a working prototype with authorization to place real orders.
+The immediate milestone is one verified real Swiggy Instamart order placed
+through the voice interface, after Pranav explicitly authorizes it. The app is
+built and tested to be ready for that attempt; see `docs/first-real-order.md`.
+Do not confuse readiness with authorization to place real orders.
 
 ## 2. Read before working
 
@@ -25,8 +27,9 @@ Read these files before planning or editing:
 2.  `README.md` --- setup and current project status.
 3.  `pyproject.toml` --- dependencies, Python version, linting, typing,
     and test configuration.
-4.  Any existing Swiggy or Gnani setup notes in the repository, if
-    present.
+4.  `docs/swiggy-integration-notes.md` --- verified Swiggy behaviour,
+    including details the public docs omit.
+5.  `docs/first-real-order.md` --- the gated procedure for a real order.
 
 If a referenced file does not exist, report that fact. Do not invent its
 contents.
@@ -48,9 +51,10 @@ contents.
 -   If documentation or access is insufficient, isolate the unknown
     behind an interface and report the blocker. Do not guess.
 
-## 4. Current delivery objective
+## 4. Delivery objective
 
-Build and verify one complete local order journey:
+Every change must keep this complete order journey working in mock mode, and
+ready for the real attempt:
 
 1.  User supplies a grocery request (typed transcript is acceptable for
     the first backend milestone).
@@ -59,15 +63,14 @@ Build and verify one complete local order journey:
 3.  An LLM extracts a validated structured intent and item list.
 4.  Deterministic application code validates and updates the
     session/cart.
-5.  A commerce adapter searches the local mock catalogue and updates a
-    mock cart.
+5.  A commerce adapter searches the catalogue and updates the cart.
 6.  The application reads back exact products, variants, quantities,
     pack sizes, prices, total, address/payment assumptions.
 7.  The user explicitly confirms the current cart.
-8.  The mock adapter completes the simulated order.
-9.  Gnani Timbre speaks the response when the TTS milestone is reached.
+8.  The adapter completes the order, which is verified independently.
+9.  Gnani Timbre speaks the response.
 
-The first end-to-end demo must not require Swiggy staging or production
+Development, tests, and demos must not require Swiggy staging or production
 checkout.
 
 ## 5. Commerce environments and safety
@@ -91,8 +94,12 @@ Important distinctions:
     change and asking Pranav when authorization is unclear.
 -   Never use production checkout for development, tests, demos, or
     failure injection.
--   Keep `ALLOW_REAL_CHECKOUT=false` by default. Do not change it,
-    enable it, or bypass it.
+-   Keep `ALLOW_REAL_CHECKOUT=false` and `ALLOW_SWIGGY_CART_WRITES=false`
+    by default. Do not change them, enable them, or bypass them. Only
+    Pranav turns them on, following `docs/first-real-order.md`.
+-   Read-only checks against the real account use
+    `uv run python -m app.swiggy_preflight`, which cannot write and prints
+    no personal data.
 -   If production read-only access is later configured, explicitly
     disable checkout in the adapter as well as through configuration. Do
     not rely on a UI or prompt to enforce this.
@@ -104,8 +111,10 @@ Important distinctions:
     current MVP.
 
 Never blindly retry a checkout after a timeout, connection loss, or
-ambiguous response. Reconcile order status first. Never assume a
-cancellation capability exists.
+ambiguous response. Reconcile order status first. An outcome that cannot
+be proven stays `ORDER_UNKNOWN` and blocks all checkout until a person
+settles it with `uv run python -m app.order_admin`. Never assume a
+cancellation capability exists; Swiggy directs cancellations to customer care.
 
 ## 6. Non-negotiable application invariants
 
@@ -114,9 +123,9 @@ cancellation capability exists.
     effects.
 2.  **The state machine owns every transition.** Only deterministic
     application code may emit commerce effects.
-3.  **Checkout is gated.** For the current MVP, checkout is mock-only.
-    In any later authorized environment, checkout can only be emitted
-    after explicit confirmation of the exact current cart.
+3.  **Checkout is gated.** Checkout can only be emitted after explicit
+    confirmation of the exact cart most recently read back, and real
+    checkout also requires its own configuration switches.
 4.  **Cart edits invalidate confirmation.** Any item, quantity, variant,
     price, address, or payment change requires a fresh readback and
     confirmation.
@@ -130,10 +139,16 @@ cancellation capability exists.
     generated artifacts.**
 9.  **Minimize personal data.** Do not log phone numbers or full
     addresses in plaintext. Do not send unnecessary personal data to the
-    LLM.
+    LLM. `app/observability.py` only emits allow-listed scalar fields.
 10. **Fail closed.** Invalid model output, unknown state, missing cart
     data, unknown environment, or failed validation must not trigger a
     commerce side effect.
+11. **Never overwrite an existing cart blindly.** Read it first and keep
+    its contents. `update_cart` replaces the whole cart.
+12. **Journal before checkout.** An attempt is durably recorded before the
+    call, so it survives restarts.
+13. **Say what is true.** A real order is never described as a demo, a
+    demo never as real, and an unverified order never as verified.
 
 ## 7. State machine implementation rules
 

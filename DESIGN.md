@@ -3,8 +3,14 @@
 **Project:** Voice-first grocery assistant for elderly users\
 **Competition:** Gnani AI Great Indian AI Internship Challenge\
 **Stated deadline:** 10 November 2026, 11:59 PM IST\
-**Current delivery target:** A reliable local end-to-end demo using real
-Gnani speech APIs where integrated and mock commerce checkout.
+**Current delivery target:** One verified real Swiggy Instamart order by
+voice, after explicit authorization (`docs/first-real-order.md`). Mock
+commerce remains the default for development, tests, and demos.
+
+> **Status note.** Sections 2 and 14 record the original build sequence. The
+> mock MVP and Gnani voice milestones are complete. §4, §5, §8, and §15 describe
+> the current system. Verified Swiggy behaviour is in
+> `docs/swiggy-integration-notes.md`.
 
 ------------------------------------------------------------------------
 
@@ -136,11 +142,11 @@ the local demo.
                           application code can    capability; tests
                           trigger checkout.       verify effect gating.
 
-  R8                      The local MVP cannot    Default backend is
-                          place a real order.     mock; production
-                                                  checkout is disabled
-                                                  and unavailable in the
-                                                  MVP.
+  R8                      A real order needs      Default backend is
+                          explicit switches.      mock; cart writes and
+                                                  real checkout are
+                                                  separately off, with a
+                                                  money and order limit.
 
   R9                      External API failures   Mock failure-injection
                           are handled safely and  tests cover expected
@@ -264,8 +270,10 @@ Suggested states:
 -   `READBACK`
 -   `CONFIRMED`
 -   `PLACING`
+-   `VERIFYING`
 -   `DONE`
 -   `FAILED`
+-   `ORDER_UNKNOWN` (terminal: outcome could not be proven)
 
 Suggested events:
 
@@ -296,19 +304,26 @@ stateDiagram-v2
     READBACK --> COLLECTING: user edits cart
     READBACK --> CONFIRMED: explicit yes for current cart
     READBACK --> COLLECTING: user says no / wants changes
-    CONFIRMED --> PLACING: mock checkout effect
-    PLACING --> DONE: mock checkout succeeds
-    PLACING --> FAILED: mock checkout fails
-    FAILED --> READBACK: safe recovery after state is known
+    CONFIRMED --> PLACING: exactly one PlaceOrder effect
+    PLACING --> VERIFYING: checkout reports an order
+    PLACING --> FAILED: anything else; order history is checked
+    PLACING --> READBACK: a guard stopped it before sending
+    FAILED --> VERIFYING: a new order exists
+    FAILED --> READBACK: definite refusal AND proof of no new order
+    FAILED --> ORDER_UNKNOWN: anything else
+    VERIFYING --> DONE: checked independently, result spoken truthfully
     DONE --> [*]
+    ORDER_UNKNOWN --> [*]
 ```
 
 ### 5.3 Safety invariants
 
 1.  `PlaceOrder` is not an LLM tool. The LLM cannot emit it.
-2.  In the MVP, `PlaceOrder` can only target `MockCommerce`.
-3.  A confirmation is bound to the current cart version or deterministic
-    `cart_hash`.
+2.  Real checkout requires `ALLOW_SWIGGY_CART_WRITES`, `ALLOW_REAL_CHECKOUT`,
+    and `MAX_REAL_ORDER_INR`, plus the journal's `REAL_ORDER_LIMIT`.
+3.  A confirmation is bound to the exact version and `cart_hash` (cart,
+    prices, total, address, payment) most recently read back. The browser echoes
+    the readback it received with every spoken turn.
 4.  Any cart mutation invalidates confirmation and returns the flow to
     `READBACK` or `COLLECTING`.
 5.  An unclear answer is never treated as yes.
@@ -317,7 +332,8 @@ stateDiagram-v2
     adapter-sourced.
 8.  An invalid event or impossible transition fails closed and emits no
     commerce side effect.
-9.  Checkout is emitted at most once for a given mock order attempt.
+9.  Checkout is called at most once per attempt and the attempt is journaled
+    first. An unresolved attempt blocks all checkout across sessions and restarts.
 10. The state machine performs no I/O, reads no environment variables,
     and does not access a clock.
 
@@ -445,13 +461,15 @@ Adapt this to existing repository models rather than copying it blindly.
   `swiggy_staging`        Seeded non-production   Not yet granted
                           integration testing     
 
-  `swiggy_prod`           Authorized production   No production checkout
-                          operations              in MVP
+  `swiggy_prod`           Authorized production   Read-only until Pranav
+                          operations              authorizes one order
   -----------------------------------------------------------------------
 
-**Current known access status:** Pranav has permission to build locally.
-Staging and production access will be requested after the demo. Do not
-assume staging allowlisting has been granted.
+**Current known access status:** Pranav's own account can read through the
+production server from localhost (verified read-only: addresses, search, cart,
+payment options, orders). No staging access is recorded, and Swiggy's docs require
+production confirmation for real-user traffic. Do not assume either has been
+granted.
 
 Important: - `localhost` describes where the application runs, not which
 upstream Swiggy environment it contacts. - The existing design notes
@@ -592,7 +610,8 @@ The local MVP is demo-ready only when:
 -   [ ] The README accurately describes what works and what remains
     incomplete.
 
-A real Swiggy order is not part of this acceptance checklist.
+A real Swiggy order is not part of this acceptance checklist; it has its own
+gated procedure in `docs/first-real-order.md`.
 
 ------------------------------------------------------------------------
 
@@ -615,3 +634,35 @@ dependency:
 
 Do not spend the first evening on streaming, telephony, databases, or
 production checkout. A small, correct, demonstrable flow is the goal.
+
+------------------------------------------------------------------------
+
+## 15. Current architecture
+
+``` text
+Browser (push-to-talk, tap options, echoes the readback it received)
+  │  local-only API when a real account is configured
+  ▼
+web.py ── sessions, per-session lock, last reply kept for recovery
+  ├─► gnani.PrismaSTT
+  ├─► orchestrator/turn_runner.py     interprets a turn, executes effects
+  │     ├─ confirmation.py            deterministic yes/no and option choice
+  │     ├─ llm/extractor.py           language understanding only, in a thread
+  │     ├─ state_machine.py           PURE: states, guards, typed effects
+  │     ├─ item_resolution.py         PURE: request + results → line or question
+  │     ├─ checkout.py                the only caller of adapter.checkout
+  │     │    └─ commerce/order_journal.py   durable attempts (file, flock, fsync)
+  │     └─ commerce/base.py           adapter protocol and domain models
+  │          ├─ commerce/mock.py      default; in-memory, per session
+  │          └─ commerce/swiggy.py    one MCP session, tool allowlist, write locks
+  ├─► voice/presentation.py           app-owned phrases; aware of real vs demo
+  └─► gnani.TimbreTTS
+```
+
+Checkout sequence: re-read the cart and payment options → compare with the
+confirmed hash → record existing order IDs → journal the attempt → call
+checkout once → on anything unclear, poll for an order ID not in the baseline →
+verify in order history (or tracking) → speak only what is known.
+
+Operational tools: `app.swiggy_auth` (login), `app.swiggy_preflight` (read-only
+readiness), `app.order_admin` (inspect and settle attempts).

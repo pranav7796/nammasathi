@@ -192,18 +192,19 @@ def _resolve_pack_count(
     if len(in_stock) == 1 and trusted and known_unit:
         product, variant = in_stock[0]
         return Resolution(entry=_entry(product, variant, quantity), auto_resolved=quantity > 1)
-    # Prefer one small pack from each product, so options offer brands before bulk sizes.
-    distinct: list[CartEntry] = []
-    seen: set[str] = set()
 
+    # Keep the catalogue's relevance order, offering each product's smallest pack, so options
+    # show brands before bulk sizes and a grinder never outranks ordinary salt for being small.
     def size(item: tuple[Product, Variant]) -> Decimal:
         amount = variant_amount(item[1])
         return amount.value if amount is not None else Decimal(10**9)
 
-    for product, variant in sorted(in_stock, key=size):
-        if product.id not in seen:
-            seen.add(product.id)
-            distinct.append(_entry(product, variant, quantity))
+    distinct: list[CartEntry] = []
+    for product in products:
+        offered = [item for item in in_stock if item[0].id == product.id]
+        if offered:
+            smallest = min(offered, key=size)
+            distinct.append(_entry(smallest[0], smallest[1], quantity))
     if len(distinct) < MAX_OPTIONS:
         for product, variant in in_stock:
             entry = _entry(product, variant, quantity)

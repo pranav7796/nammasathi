@@ -1,122 +1,118 @@
-# ajji-mart
+# Ajji Mart
 
-Voice agent that helps elderly users order groceries from Swiggy Instamart in Kannada / Hinglish
-(Gnani Prisma STT → LLM → state machine → Swiggy MCP → Gnani Timbre TTS).
+A voice-first grocery assistant that helps elderly users order from Swiggy Instamart
+in Kannada, Hindi, or English.
 
-See `DESIGN.md` for the design and `AGENTS.md` for rules for coding agents.
+Prisma STT → LLM intent extraction → deterministic state machine → commerce adapter →
+Timbre TTS.
+
+The LLM only understands language. It has no tools and cannot touch the cart or place
+an order. Deterministic code owns every decision.
+
+## Status
+
+The full journey works by voice in all three languages against the mock shop:
+request, product choice, cart, readback, spoken confirmation, order, verification,
+spoken result. Read-only access to the real Swiggy account has been verified.
+
+**No real order has been placed.** Writing to the real cart and real checkout have
+never been exercised live. Both are off by default, and the procedure is in
+[docs/first-real-order.md](docs/first-real-order.md).
+
+## Setup
 
 ```bash
-cp .env.example .env    # keep ALLOW_REAL_CHECKOUT=false for local work
+cp .env.example .env
 uv sync
 uv run pytest
 ```
 
-## Browser push-to-talk demo
-
-The browser and API are served from one local FastAPI process. Configure the
-existing Gemini/OpenRouter and Gnani credentials in `.env`, then start it with:
+## Run it
 
 ```bash
-uv run uvicorn app.web:app --reload
+uv run uvicorn app.web:app --reload     # mock mode only; never --reload with a real account
 ```
 
-Open <http://127.0.0.1:8000>. Choose Kannada, Hindi, or English, start a
-conversation, and press **Speak** to record and **Finish** to upload. The page
-keeps the conversation in this browser tab, shows the transcript and mock cart,
-and plays Ajji's synthesized response. Confirm and cancel buttons send explicit
-events through the existing deterministic state machine. Confirmation includes
-the readback's cart version and hash; a stale page receives a fresh readback
-instead of placing an order.
+Open <http://localhost:8000>. Choose a language and address, press **Tap to speak**, and
+finish with **Finish speaking**. Needs `GNANI_API_KEY` and `GEMINI_API_KEY`.
 
-The browser encodes microphone PCM as WAV because Prisma's REST adapter accepts
-WAV. Recordings stop at 30 seconds and uploads are limited to 12 MiB. Sessions
-are in memory and expire after 30 minutes of inactivity or a server restart.
-The language selected when a conversation starts is stored with that session
-and configures Prisma STT, intent clarification instructions, deterministic
-response phrases, and Timbre TTS for every turn. `GNANI_TTS_VOICE` selects a
-multilingual Timbre v2.5 voice; it does not select the conversation language.
-Use localhost or HTTPS for microphone access. This browser app refuses startup
-unless commerce is mock-only and real checkout is disabled.
+Without a browser: `uv run python -m app.text_demo` (typed), or
+`uv run python -m app.voice_demo --language hi-IN request.wav` (audio files). Both use
+the mock shop.
 
-Run the mocked browser API tests with `uv run pytest -q tests/test_web.py`.
+## Configuration
 
-Run the Gemini text demo with a local key:
+Everything real is off unless switched on, and each switch requires the one before it.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `COMMERCE_BACKEND` | `mock` | `mock` never constructs a Swiggy client |
+| `SWIGGY_LIVE_ACCESS` | `false` | Read your real account |
+| `ALLOW_SWIGGY_CART_WRITES` | `false` | Change your real cart |
+| `ALLOW_REAL_CHECKOUT` | `false` | Place real orders; needs the above and `MAX_REAL_ORDER_INR` |
+| `MAX_REAL_ORDER_INR` | none | Refuse any order above this total |
+| `REAL_ORDER_LIMIT` | `1` | Orders the journal may record before refusing more |
+| `ORDER_JOURNAL_PATH` | `var/order_attempts.jsonl` | Durable checkout attempt record |
+| `GNANI_TTS_VOICE` | per language | Saanvi, Nalini, or Kaveri unless overridden |
+
+See `.env.example` for the LLM and speech settings. Gemini is primary, with Groq and
+OpenRouter as fallbacks. OpenRouter's free model may log requests, so it is disabled
+when a real account is configured.
+
+## Tools
 
 ```bash
-GEMINI_API_KEY=your-key uv run python -m app.text_demo
+uv run python -m app.swiggy_auth        # sign in to Swiggy (OAuth + PKCE; token in OS keyring)
+uv run python -m app.swiggy_preflight   # read-only readiness report; prints no personal data
+uv run python -m app.order_admin status # checkout attempts in the journal
 ```
 
-Run the turn-based Gnani voice demo with one or more initial audio files:
+## How an order stays safe
+
+- **Nothing incompatible is chosen silently.** A product is chosen without asking only
+  if exactly one in-stock variant, from a matching product, makes exactly the requested
+  amount. Otherwise up to three options are spoken and shown.
+- **Questions keep your place.** Resolved items and the rest of the list wait while one
+  question is answered, and the cart is written once.
+- **Approval is bound to what you heard.** A yes covers one exact readback: items, prices,
+  total, address, and payment. Any change needs a new readback. The LLM's opinion never
+  counts as a yes.
+- **Your existing cart is protected.** It is read first and kept, and an edit made in the
+  Swiggy app between turns is never overwritten. Cancel restores what you started with.
+- **Checkout cannot run twice by accident.** Each attempt is written to disk before the
+  call. An unclear result is checked against order history by looking for a new order ID.
+  What cannot be proven becomes `ORDER_UNKNOWN`, which blocks checkout across sessions and
+  restarts until a person settles it.
+- **Payment is verified.** Cash on delivery must be reported available for the current cart
+  before you are asked to confirm.
+- **The result is verified and worded truthfully.** Orders are checked in order history or
+  tracking, and a real order is never called a demo, nor a demo real.
+
+See [DESIGN.md](DESIGN.md) for the design, [AGENTS.md](AGENTS.md) for rules for coding
+agents, and [docs/swiggy-integration-notes.md](docs/swiggy-integration-notes.md) for
+verified Swiggy behaviour.
+
+## Checks
 
 ```bash
-uv run python -m app.voice_demo --language hi-IN request.wav
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest
+node --test tests/frontend/ajji-mart.test.cjs
 ```
 
-The demo asks for another audio path after processing the initial files. It
-keeps one conversation in memory and writes synthesized replies under
-`voice-output/`. The `--language` option is required and is used for both STT
-and TTS. The selected Timbre v2.5 voice remains the same across languages.
+Tests cannot reach the network or the OS credential store: `tests/conftest.py` makes any
+attempt fail.
 
-Prisma REST documents a maximum recording length of 30 seconds. The adapter
-checks WAV duration locally and relies on Prisma to enforce the limit for other
-documented formats.
+## Known limitations
 
-Gemini requests have a 60-second per-attempt timeout and at most two total
-attempts per candidate, with a short exponential backoff and jitter. The
-extractor discovers compatible models at startup, prefers `GEMINI_MODEL`, and
-tries at most two fallback candidates. Use `refresh_models()` to refresh the
-process cache without restarting.
-
-Gemini remains the primary intent provider. Gemini quota exhaustion
-(`429 RESOURCE_EXHAUSTED`) immediately skips remaining Gemini models and
-tries Groq with `GROQ_API_KEY` and `GROQ_MODEL` (default
-`openai/gpt-oss-20b`). If Groq is unavailable or returns invalid output, the
-extractor can use OpenRouter with `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` (default
-`nvidia/nemotron-3-ultra-550b-a55b:free`). The fallback requests JSON using the
-existing intent schema and validates it with Pydantic; neither fallback sends
-tools or has cart or checkout capabilities. Groq uses the OpenAI-compatible
-Chat Completions API with strict JSON schema output and retries without that
-option only when the endpoint rejects it. OpenRouter does not use
-`response_format`. The OpenRouter request follows its [Chat
-Completions API](https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request?explorer=true)
-and [Nemotron model page](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b%3Afree).
-OpenRouter's free Nemotron endpoint may log requests and should not receive
-confidential or personal data.
-
-Example: enter `2 kg rice and 1 litre milk`, then answer the readback with
-`yes`. Gemini extracts only the item names, quantities, and units; catalogue
-matching, prices, cart readback, confirmation, and checkout are handled by
-the deterministic runner and `MockInstamart`.
-
-Status: the deterministic state machine, `MockInstamart`, and a text-turn
-mock order runner are implemented and tested. `SwiggyInstamart` uses the
-official Instamart MCP endpoint with OAuth 2.1 + PKCE and stores credentials in
-the operating system credential store. Its read, cart, and checkout operations
-are available behind an explicit local-development switch; checkout also
-requires `ALLOW_REAL_CHECKOUT=true` and an explicit confirmation of the current
-cart.
-
-Gemini intent extraction is implemented with strict Pydantic validation and
-mocked-response tests. Gnani STT/TTS, a web UI, and live Gemini calls are not
-part of the automated test suite.
-
-The safe local configuration is:
-
-```dotenv
-COMMERCE_BACKEND=mock
-SWIGGY_LIVE_ACCESS=false
-ALLOW_REAL_CHECKOUT=false
-```
-
-For read-only local account connection, set `COMMERCE_BACKEND=swiggy` and
-`SWIGGY_LIVE_ACCESS=true`, then run `uv run python -m app.swiggy_auth`. Open the
-printed Swiggy authorization URL, finish authentication, paste the redirected
-`http://localhost` address-bar URL into the CLI, choose a saved address, and
-review the product search, current cart, address, and total. This CLI never
-places an order.
-
-Never enable real checkout for automated tests or demos. For any later real
-order, explicitly enable `ALLOW_REAL_CHECKOUT=true`, review the full cart,
-delivery address, payment method, and total in the UI, then confirm the exact
-readback. If checkout times out, reconcile with order status before attempting
-anything again.
+- Real `update_cart`, `checkout`, and a populated `get_orders` have never been exercised
+  live, because they need real writes. See the notes file for each unobserved detail.
+- Kannada and Hindi phrases need review by native speakers, ideally with elderly users.
+- Tested with synthesized speech through the API, not yet with a person at a microphone.
+- Cash on delivery only. Sessions are in memory, so a restart loses the conversation but
+  not the order journal. One user, one process, on this machine.
+- A turn can take 5 to 20 seconds, mostly in the LLM, and an unclear checkout up to about
+  30 seconds more.
+- Hinglish is handled through `hi-IN`; Prisma v3 multi-language hints are not used yet.

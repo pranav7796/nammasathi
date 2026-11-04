@@ -305,10 +305,12 @@ def response_text(effects: list[Effect], *, language: str, commerce_mode: str) -
     if phrases is None:
         raise ValueError("Language must be kn-IN, hi-IN, or en-IN")
 
+    says = [effect for effect in effects if isinstance(effect, Say)]
+    # Replies are spoken after the work is finished, so "one moment" only makes sense alone.
+    if len(says) > 1:
+        says = [say for say in says if say.template != "filler_search"]
     parts: list[str] = []
-    for effect in effects:
-        if not isinstance(effect, Say):
-            continue
+    for effect in says:
         if effect.template == "readback":
             parts.append(_render_readback(effect, phrases))
         elif effect.template == "cart_blocked":
