@@ -1,0 +1,1 @@
+"""Gnani speech adapters."""

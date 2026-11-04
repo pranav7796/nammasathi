@@ -1,0 +1,40 @@
+[project]
+name = "ajji-mart"
+version = "0.1.0"
+description = "Voice agent for elderly users ordering Swiggy Instamart groceries in Kannada/Hinglish"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "google-genai",
+  "uvicorn",
+  "pydantic>=2",
+  "httpx",
+  "websockets",
+  "mcp",
+  "keyring",
+  "python-dotenv",
+]
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "hypothesis", "ruff", "pyright", "pre-commit"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pyright]
+include = ["app", "tests"]
+typeCheckingMode = "strict"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+markers = ["live: read-only tests requiring an authenticated Swiggy MCP session"]
