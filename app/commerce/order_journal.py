@@ -47,6 +47,7 @@ class OrderAttempt:
     order_ids: tuple[str, ...] = ()
     order_status: str = ""
     note: str = ""
+    domain: str = "grocery"  # one journal, so an uncertain attempt anywhere blocks every checkout
 
 
 def new_attempt(
@@ -54,6 +55,8 @@ def new_attempt(
     total_inr: str,
     baseline_order_ids: tuple[str, ...],
     item_names: tuple[str, ...],
+    *,
+    domain: str = "grocery",
 ) -> OrderAttempt:
     return OrderAttempt(
         attempt_id=uuid4().hex,
@@ -63,6 +66,7 @@ def new_attempt(
         total_inr=total_inr,
         baseline_order_ids=baseline_order_ids,
         item_names=item_names,
+        domain=domain,
     )
 
 
@@ -159,6 +163,7 @@ class FileOrderJournal:
                     order_ids=tuple(cast(list[str], value.get("order_ids", []))),
                     order_status=str(value.get("order_status", "")),
                     note=str(value.get("note", "")),
+                    domain=str(value.get("domain", "grocery")),
                 )
             except (ValueError, KeyError, TypeError) as exc:
                 raise JournalError("The order journal is corrupted") from exc

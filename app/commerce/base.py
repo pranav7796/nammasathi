@@ -221,7 +221,7 @@ def classify_rejection(message: str) -> RejectionKind | None:
         return RejectionKind.MIN_ORDER
     if "out of stock" in text or "unavailable" in text or "sold out" in text:
         return RejectionKind.OUT_OF_STOCK
-    if "serviceable" in text:
+    if "serviceable" in text or "closed" in text:
         return RejectionKind.NOT_SERVICEABLE
     if "cart expired" in text or "abandoned" in text or "cart is empty" in text:
         return RejectionKind.CART_EXPIRED

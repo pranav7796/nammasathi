@@ -24,6 +24,7 @@ class Settings:
     swiggy_live_access: bool = False
     allow_real_checkout: bool = False
     allow_swiggy_cart_writes: bool = False
+    allow_real_booking: bool = False
     max_real_order_inr: Decimal | None = None
     real_order_limit: int = 1
     order_journal_path: str = DEFAULT_ORDER_JOURNAL_PATH
@@ -71,6 +72,10 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     allow_cart_writes = _flag(values, "ALLOW_SWIGGY_CART_WRITES")
     if allow_cart_writes and not swiggy_live_access:
         raise ConfigurationError("ALLOW_SWIGGY_CART_WRITES=true requires SWIGGY_LIVE_ACCESS=true")
+
+    allow_real_booking = _flag(values, "ALLOW_REAL_BOOKING")
+    if allow_real_booking and not swiggy_live_access:
+        raise ConfigurationError("ALLOW_REAL_BOOKING=true requires SWIGGY_LIVE_ACCESS=true")
 
     allow_real_checkout = _flag(values, "ALLOW_REAL_CHECKOUT")
     if allow_real_checkout and backend != "swiggy":
@@ -139,6 +144,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         swiggy_live_access=swiggy_live_access,
         allow_real_checkout=allow_real_checkout,
         allow_swiggy_cart_writes=allow_cart_writes,
+        allow_real_booking=allow_real_booking,
         max_real_order_inr=max_real_order,
         real_order_limit=real_order_limit,
         order_journal_path=journal_path,

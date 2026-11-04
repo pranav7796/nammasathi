@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import app.dining.state_machine as dining_machine
 import app.orchestrator.state_machine as machine
 from app.orchestrator.state_machine import CartEntry, Say
 from app.voice.presentation import _PHRASES, response_text  # pyright: ignore[reportPrivateUsage]
@@ -35,10 +36,10 @@ def test_every_language_has_every_phrase() -> None:
 
 
 def test_every_template_the_state_machine_can_say_exists() -> None:
-    source = Path(machine.__file__).read_text()
+    source = Path(machine.__file__).read_text() + Path(dining_machine.__file__).read_text()
     templates = set(re.findall(r'Say\(\s*"([a-z_]+)"', source))
     templates |= {"order_not_attempted", "order_limit", "checkout_disabled"}
-    templates -= {"clarification"}  # rendered by kind
+    templates -= {"clarification", "dining_options"}  # rendered by kind
     assert templates <= set(_PHRASES["en-IN"])
 
 

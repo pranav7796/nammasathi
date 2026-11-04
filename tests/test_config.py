@@ -2,9 +2,19 @@ import pytest
 
 from app.commerce.mock import MockInstamart
 from app.commerce.order_journal import FileOrderJournal, InMemoryOrderJournal
-from app.commerce.runtime import checkout_policy, commerce_adapter, order_journal
+from app.commerce.runtime import (
+    checkout_policy,
+    commerce_adapter,
+    dining_adapter,
+    food_adapter,
+    order_journal,
+)
 from app.commerce.swiggy import SwiggyInstamart
 from app.config import ConfigurationError, load_settings
+from app.dining.mock import MockDineout
+from app.dining.swiggy import SwiggyDineout
+from app.food.mock import MockFood
+from app.food.swiggy import SwiggyFood
 
 
 def test_configuration_defaults_to_mock_and_disables_real_checkout() -> None:
@@ -184,3 +194,30 @@ def test_real_adapter_receives_each_switch_separately() -> None:
     assert isinstance(adapter, SwiggyInstamart)
     assert adapter.allow_cart_writes is False
     assert adapter.allow_real_checkout is False
+
+
+def test_real_booking_is_its_own_switch() -> None:
+    assert load_settings({}).allow_real_booking is False
+    assert load_settings(REAL_ORDER).allow_real_booking is False
+    with pytest.raises(ConfigurationError, match="ALLOW_REAL_BOOKING"):
+        load_settings({"ALLOW_REAL_BOOKING": "true"})
+    read_only = {"COMMERCE_BACKEND": "swiggy", "SWIGGY_LIVE_ACCESS": "true"}
+    assert load_settings({**read_only, "ALLOW_REAL_BOOKING": "true"}).allow_real_booking is True
+
+
+def test_live_food_and_dining_clients_get_only_their_own_switches() -> None:
+    settings = load_settings({"COMMERCE_BACKEND": "swiggy", "SWIGGY_LIVE_ACCESS": "true"})
+    food = food_adapter(settings, "addr")
+    dining = dining_adapter(settings)
+    assert isinstance(food, SwiggyFood)
+    assert food.endpoint == "https://mcp.swiggy.com/food"
+    assert (food.allow_cart_writes, food.allow_real_checkout) == (False, False)
+    assert isinstance(dining, SwiggyDineout)
+    assert dining.endpoint == "https://mcp.swiggy.com/dineout"
+    assert dining.allow_real_checkout is False
+
+
+def test_mock_mode_never_builds_live_food_or_dining_clients() -> None:
+    settings = load_settings({})
+    assert isinstance(food_adapter(settings, "addr"), MockFood)
+    assert isinstance(dining_adapter(settings), MockDineout)

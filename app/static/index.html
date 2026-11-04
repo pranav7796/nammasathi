@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#fff8ec">
-    <title>Ajji Mart — your grocery helper</title>
+    <title>Namma Saathi — your personal AI for everyday life</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/app.js" defer></script>
@@ -12,8 +12,8 @@
   <body>
     <main class="page">
       <header class="masthead">
-        <div class="brand-mark" aria-hidden="true">ಅ</div>
-        <div class="brand-copy"><h1>Ajji Mart</h1><p>Your friendly grocery helper</p></div>
+        <div class="brand-mark" aria-hidden="true">ಸ</div>
+        <div class="brand-copy"><h1>Namma Saathi</h1><p>Your personal AI for everyday life</p></div>
         <p id="commerce-badge" class="demo-badge">Demo order</p>
       </header>
 
@@ -21,8 +21,8 @@
 
       <section class="panel home-panel" aria-labelledby="start-heading">
         <p class="eyebrow">Namaste · ನಮಸ್ಕಾರ</p>
-        <h2 id="start-heading">Tell Ajji what you need.</h2>
-        <p class="welcome-copy">Speak naturally. I will help you add groceries to your basket.</p>
+        <h2 id="start-heading">Tell Saathi what you need.</h2>
+        <p class="welcome-copy">Just say it, and I'll help get it done: groceries, a meal, or a table at a restaurant.</p>
         <label for="language">Choose the language you will speak</label>
         <select id="language" aria-describedby="language-help">
           <option value="kn-IN">ಕನ್ನಡ · Kannada</option>
@@ -33,48 +33,48 @@
         <label for="delivery-address">Delivery address</label>
         <select id="delivery-address" aria-describedby="address-help" disabled></select>
         <p id="address-help" class="language-help">Choose the address for this order.</p>
-        <button id="start-button" class="mic-button" type="button" aria-label="Start speaking with Ajji">
+        <button id="start-button" class="mic-button" type="button" aria-label="Start speaking with Saathi">
           <span class="mic-symbol" aria-hidden="true">🎙</span><span>Tap to speak</span>
         </button>
         <p class="how-to">Tap once and speak clearly. Tap <strong>Finish speaking</strong> when you are done. You can say one item or several.</p>
         <p id="commerce-note" class="demo-note">This is a demo. Orders are not sent to a shop.</p>
       </section>
 
-      <section id="conversation" class="conversation" aria-label="Your conversation with Ajji" hidden>
+      <section id="conversation" class="conversation" aria-label="Your conversation with Saathi" hidden>
         <section class="panel voice-panel" aria-labelledby="voice-heading">
           <div class="voice-copy">
             <p class="eyebrow" id="language-status">ಕನ್ನಡ · Kannada selected</p>
             <h2 id="voice-heading">What would you like?</h2>
-            <p id="recording-status" class="recording-status" role="status" aria-live="polite">Tap the microphone and tell Ajji.</p>
+            <p id="recording-status" class="recording-status" role="status" aria-live="polite">Tap the microphone and tell Saathi.</p>
           </div>
           <button id="record-button" class="mic-button" type="button" aria-pressed="false" aria-label="Start recording">
-            <span class="mic-symbol" aria-hidden="true">🎙</span><span id="record-label">Speak to Ajji</span>
+            <span class="mic-symbol" aria-hidden="true">🎙</span><span id="record-label">Speak to Saathi</span>
           </button>
-          <p class="voice-help">For example: “two kilos of rice and one litre of milk.” Recordings stop after 30 seconds.</p>
+          <p class="voice-help">For example: “milk and bread”, “something for dinner”, or “a table for two on Friday.” Recordings stop after 30 seconds.</p>
         </section>
 
         <div class="conversation-grid">
           <section class="panel talk-panel" aria-labelledby="conversation-heading">
-            <h2 id="conversation-heading">Ajji is here to help</h2>
-            <p id="assistant-text" class="assistant-text" aria-live="polite">Tell me what groceries you need.</p>
+            <h2 id="conversation-heading">Saathi is here to help</h2>
+            <p id="assistant-text" class="assistant-text" aria-live="polite">Tell me what you need.</p>
             <p class="field-label">What I heard</p>
             <p id="transcript" class="transcript" aria-live="polite">Your words will appear here.</p>
-            <audio id="reply-audio" controls preload="none" aria-label="Hear Ajji's reply" hidden></audio>
+            <audio id="reply-audio" controls preload="none" aria-label="Hear Saathi's reply" hidden></audio>
             <p id="audio-note" class="small-note" hidden></p>
           </section>
 
           <section class="panel cart-panel" aria-labelledby="cart-heading">
-            <div class="cart-heading-row"><h2 id="cart-heading">Your basket</h2><span id="state-label" class="state-label">Ready</span></div>
-            <ul id="cart-items" class="cart-items"><li class="empty-cart">Your basket is empty. Tell Ajji what you need.</li></ul>
+            <div class="cart-heading-row"><h2 id="cart-heading">Your task</h2><span id="state-label" class="state-label">Ready</span></div>
+            <ul id="cart-items" class="cart-items"><li class="empty-cart">Nothing here yet. Tell Saathi what you need.</li></ul>
             <p class="cart-total"><span>Total</span><strong id="cart-total">₹0</strong></p>
             <p id="catalogue-note" class="small-note">Prices and pack sizes are from the demo catalogue.</p>
-            <p class="edit-help">To edit or remove an item, tap Speak to Ajji and tell her what to change.</p>
+            <p class="edit-help">To edit or remove an item, tap Speak to Saathi and say what to change.</p>
           </section>
         </div>
 
         <section id="options-panel" class="panel confirmation-panel" aria-labelledby="options-heading" hidden>
-          <p class="eyebrow">Ajji has a question</p>
-          <h2 id="options-heading">Which one should I add?</h2>
+          <p class="eyebrow">Saathi has a question</p>
+          <h2 id="options-heading">Which one would you like?</h2>
           <p class="confirmation-intro">Tap one, or say first, second, or third.</p>
           <div id="options-list" class="order-actions"></div>
         </section>
@@ -87,8 +87,8 @@
 
         <section id="confirmation-panel" class="panel confirmation-panel" aria-labelledby="confirm-heading" hidden>
           <p class="eyebrow">Please check before ordering</p>
-          <h2 id="confirm-heading">Is this basket correct?</h2>
-          <p id="confirmation-intro" class="confirmation-intro">Ajji will place this demo order only after you choose Confirm order.</p>
+          <h2 id="confirm-heading">Is this correct?</h2>
+          <p id="confirmation-intro" class="confirmation-intro">Saathi will place this demo order only after you choose Confirm order.</p>
           <ul id="confirmation-items" class="confirmation-items"></ul>
           <dl class="order-details">
             <div><dt>Total</dt><dd id="confirmation-total">₹0</dd></div>
@@ -99,7 +99,7 @@
           <div class="order-actions">
             <button id="confirm-button" class="confirm-button" type="button" disabled>Confirm demo order</button>
             <button id="back-button" class="secondary-button" type="button">Go back and make a change</button>
-            <button id="cancel-button" class="secondary-button" type="button">Cancel this basket</button>
+            <button id="cancel-button" class="secondary-button" type="button">Cancel this</button>
           </div>
         </section>
 

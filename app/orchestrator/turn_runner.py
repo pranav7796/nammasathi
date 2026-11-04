@@ -113,6 +113,7 @@ class TextTurnRunner:
         address_id: str | None = None,
         journal: OrderJournal | None = None,
         policy: CheckoutPolicy | None = None,
+        domain: str = "grocery",
     ) -> TextTurnRunner:
         addresses = await adapter.get_addresses()
         if not addresses:
@@ -127,7 +128,9 @@ class TextTurnRunner:
             )
             if address is None:
                 raise CommerceError("Selected delivery address was not found")
-        coordinator = CheckoutCoordinator(adapter, journal or InMemoryOrderJournal(), policy)
+        coordinator = CheckoutCoordinator(
+            adapter, journal or InMemoryOrderJournal(), policy, domain=domain
+        )
         try:
             unresolved = bool(await coordinator.recover_unresolved())
         except JournalError:
@@ -237,6 +240,33 @@ class TextTurnRunner:
         `heard` is the (cart_version, cart_hash) of the readback the client actually
         received. A spoken yes confirms that readback, not whatever the cart is now.
         """
+        direct = await self.dispatch_direct(text, heard=heard)
+        if direct is not None:
+            return direct
+        if self.extractor is None:
+            raise IntentExtractionError("No intent extractor configured")
+        try:
+            intent = await self._extract(text)
+        except (IntentExtractionError, TimeoutError):
+            return [Say("intent_error")]
+        return await self.dispatch_intent(text, intent)
+
+    async def dispatch_intent(self, text: str, intent: GroceryIntent) -> list[Effect]:
+        return await self.dispatch(self._event_from_intent(text, intent))
+
+    def clarification_context(self) -> ClarificationContext | None:
+        pending = self.session.pending
+        if pending is None or self.session.state is not State.CLARIFYING:
+            return None
+        return ClarificationContext(
+            item=pending.requested.name if pending.requested else "",
+            options=tuple(f"{line.name} {line.pack_size}".strip() for line in pending.options),
+        )
+
+    async def dispatch_direct(
+        self, text: str, *, heard: tuple[int, str] | None = None
+    ) -> list[Effect] | None:
+        """Handle replies that need no LLM: yes, no, and naming an option. None if it isn't one."""
         state = self.session.state
         if state is State.READBACK:
             confirmation = explicit_confirmation(text)
@@ -260,24 +290,14 @@ class TextTurnRunner:
                 return await self.dispatch(UserRejected())
         if state in (State.ORDER_UNKNOWN, State.PLACING, State.VERIFYING, State.FAILED):
             return await self.dispatch(UserUtterance(text, "unclear"))
-        if self.extractor is None:
-            raise IntentExtractionError("No intent extractor configured")
-        try:
-            intent = await self._extract(text)
-        except (IntentExtractionError, TimeoutError):
-            return [Say("intent_error")]
-        return await self.dispatch(self._event_from_intent(text, intent))
+        return None
 
     async def _extract(self, text: str) -> GroceryIntent:
         assert self.extractor is not None
         extractor = self.extractor
         language = self.session.language
-        pending = self.session.pending
-        if pending is not None and self.session.state is State.CLARIFYING:
-            context = ClarificationContext(
-                item=pending.requested.name if pending.requested else "",
-                options=tuple(f"{line.name} {line.pack_size}" for line in pending.options),
-            )
+        context = self.clarification_context()
+        if context is not None:
             call = asyncio.to_thread(extractor.extract, text, language=language, context=context)
         else:
             call = asyncio.to_thread(extractor.extract, text, language=language)

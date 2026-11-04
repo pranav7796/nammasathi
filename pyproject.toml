@@ -1,7 +1,7 @@
 [project]
-name = "ajji-mart"
+name = "namma-saathi"
 version = "0.1.0"
-description = "Voice agent for elderly users ordering Swiggy Instamart groceries in Kannada/Hinglish"
+description = "Namma Saathi: a personal AI that gets everyday tasks done by voice"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

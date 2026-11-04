@@ -82,14 +82,24 @@ class GroceryIntent(BaseModel):
     clarification_question: str | None = Field(default=None, max_length=240)
     # 1-based choice among options the application read out; validated by the state machine.
     option_number: int | None = Field(default=None, ge=1, le=10)
+    # Which capability this is for: grocery, food, or dining. Routing validates it.
+    domain: str | None = Field(default=None, max_length=20)
+    # Table bookings only. A date is YYYY-MM-DD and a time is 24-hour HH:MM.
+    query: str | None = Field(default=None, max_length=120)
+    area: str | None = Field(default=None, max_length=80)
+    date: str | None = Field(default=None, max_length=10)
+    time: str | None = Field(default=None, max_length=5)
+    guests: int | None = Field(default=None, ge=1, le=20)
 
 
 @dataclass(frozen=True)
 class ClarificationContext:
     """The question the user is answering. Holds catalogue names only, no personal data."""
 
-    item: str
-    options: tuple[str, ...]
+    item: str = ""
+    options: tuple[str, ...] = ()
+    active_domain: str = ""
+    today: str = ""
 
 
 class _GeminiResponse(Protocol):
@@ -98,6 +108,7 @@ class _GeminiResponse(Protocol):
 
 
 _ALLOWED_INTENTS = {
+    "book_table",
     "select_option",
     "add_items",
     "remove_items",
@@ -133,6 +144,12 @@ _GEMINI_RESPONSE_SCHEMA = {
         "needs_clarification": {"type": "BOOLEAN"},
         "clarification_question": {"type": "STRING", "nullable": True},
         "option_number": {"type": "INTEGER", "nullable": True},
+        "domain": {"type": "STRING", "nullable": True},
+        "query": {"type": "STRING", "nullable": True},
+        "area": {"type": "STRING", "nullable": True},
+        "date": {"type": "STRING", "nullable": True},
+        "time": {"type": "STRING", "nullable": True},
+        "guests": {"type": "INTEGER", "nullable": True},
     },
     "required": ["intent", "items", "needs_clarification", "clarification_question"],
 }
@@ -158,6 +175,12 @@ _GROQ_RESPONSE_SCHEMA = {
         "needs_clarification": {"type": "boolean"},
         "clarification_question": {"type": ["string", "null"]},
         "option_number": {"type": ["integer", "null"]},
+        "domain": {"type": ["string", "null"]},
+        "query": {"type": ["string", "null"]},
+        "area": {"type": ["string", "null"]},
+        "date": {"type": ["string", "null"]},
+        "time": {"type": ["string", "null"]},
+        "guests": {"type": ["integer", "null"]},
     },
     "required": [
         "intent",
@@ -165,6 +188,12 @@ _GROQ_RESPONSE_SCHEMA = {
         "needs_clarification",
         "clarification_question",
         "option_number",
+        "domain",
+        "query",
+        "area",
+        "date",
+        "time",
+        "guests",
     ],
     "additionalProperties": False,
 }
@@ -853,8 +882,16 @@ def _parse_response(response: _GeminiResponse) -> GroceryIntent:
 
 
 def _with_context(text: str, context: ClarificationContext | None) -> str:
-    if context is None or not context.options:
+    if context is None:
         return text
+    notes: list[str] = []
+    if context.today:
+        notes.append(f"Today is {context.today}; resolve spoken dates against it.")
+    if context.active_domain:
+        notes.append(f"The current task is {context.active_domain}.")
+    extra = f"\n\n{' '.join(notes)}" if notes else ""
+    if not context.options:
+        return text + extra
     numbered = "; ".join(
         f"{number}. {option}" for number, option in enumerate(context.options, start=1)
     )
@@ -862,6 +899,7 @@ def _with_context(text: str, context: ClarificationContext | None) -> str:
         f"{text}\n\nThe user is answering this question about {context.item!r}. Options: "
         f"{numbered}. If they pick one, by position, brand, or size, use intent select_option "
         "with its option_number. Never pick an option they did not clearly describe."
+        f"{extra}"
     )
 
 
@@ -878,7 +916,14 @@ def _prompt(text: str, language: str) -> str:
         "or दूध become milk; akki or चावल become rice). Keep a brand in search_term only if the "
         "user said one. Put a spoken pack count in unit as packet (for example three packets). "
         "Supported intents are add_items, remove_items, change_quantity, reorder_usual, done, "
-        "confirm, reject, cancel, select_option, and unclear. "
+        "confirm, reject, cancel, select_option, book_table, and unclear. "
+        "Set domain to grocery for groceries and household shopping, food for ready-to-eat meals "
+        "delivered from a restaurant, or dining for reserving a table to eat out, and null if it "
+        "cannot be told. For a meal with no dish named, such as wanting something for dinner, use "
+        "domain food with needs_clarification true. Dishes use add_items. "
+        "For a table use intent book_table with query (one cuisine or restaurant name), area "
+        "(city or neighbourhood), date as YYYY-MM-DD, time as 24-hour HH:MM, and guests, leaving "
+        "anything the user did not say as null. Users may mix Kannada, Hindi, and English. "
         "For remove_items include the item with quantity 1 when no quantity is given.\n\n"
         f"User text: {text}"
     )

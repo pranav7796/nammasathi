@@ -30,6 +30,7 @@ for _names, _measure, _factor in (
 # A count of whole packs rather than a physical amount ("3 packets of milk").
 _PACK_COUNT_UNITS = frozenset(
     {"packet", "packets", "pack", "packs", "pkt", "pkts", "ಪ್ಯಾಕೆಟ್", "ಪ್ಯಾಕ್", "पैकेट", "पैक"}
+    | {"plate", "plates", "serving", "servings", "portion", "portions", "ಪ್ಲೇಟ್", "प्लेट"}
 )
 
 _MULTIPLY = r"[x×*]"

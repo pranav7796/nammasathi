@@ -71,10 +71,30 @@ REAL_REJECTION_DELAYS = (2.0,)
 REAL_VERIFY_DELAYS = (0.0, 3.0, 7.0)
 
 
-class _Guarded(Exception):
+class AttemptRefused(Exception):
+    """A journal guard refused to start an attempt."""
+
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+_Guarded = AttemptRefused
+
+
+def attempt_guard(policy: CheckoutPolicy, total: Decimal) -> Callable[[list[OrderAttempt]], None]:
+    """The rule for starting any real-world attempt, shared by every capability."""
+
+    def check(existing: list[OrderAttempt]) -> None:
+        if any(attempt.status in UNRESOLVED for attempt in existing):
+            raise AttemptRefused("unresolved_attempt")
+        used = sum(attempt.status is AttemptStatus.PLACED for attempt in existing)
+        if policy.max_orders is not None and used >= policy.max_orders:
+            raise AttemptRefused("order_limit")
+        if policy.max_total_inr is not None and total > policy.max_total_inr:
+            raise AttemptRefused("order_limit")
+
+    return check
 
 
 class CheckoutCoordinator:
@@ -85,7 +105,9 @@ class CheckoutCoordinator:
         policy: CheckoutPolicy | None = None,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        domain: str = "grocery",
     ) -> None:
+        self.domain = domain
         self.adapter = adapter
         self.journal = journal
         self.policy = policy or CheckoutPolicy()
@@ -94,18 +116,7 @@ class CheckoutCoordinator:
         self._refusal = ""
 
     def _guard(self, session_total: Decimal) -> Callable[[list[OrderAttempt]], None]:
-        def check(existing: list[OrderAttempt]) -> None:
-            if any(attempt.status in UNRESOLVED for attempt in existing):
-                raise _Guarded("unresolved_attempt")
-            limit = self.policy.max_orders
-            used = sum(attempt.status is AttemptStatus.PLACED for attempt in existing)
-            if limit is not None and used >= limit:
-                raise _Guarded("order_limit")
-            maximum = self.policy.max_total_inr
-            if maximum is not None and session_total > maximum:
-                raise _Guarded("order_limit")
-
-        return check
+        return attempt_guard(self.policy, session_total)
 
     async def _order_ids(self) -> tuple[str, ...]:
         orders = await self.adapter.get_orders(count=ORDER_HISTORY_COUNT)
@@ -125,6 +136,7 @@ class CheckoutCoordinator:
             format_money(session.total_inr),
             baseline,
             tuple(line.name for line in session.cart),
+            domain=self.domain,
         )
         try:
             self.journal.begin(attempt, self._guard(Decimal(session.total_inr)))
@@ -292,6 +304,8 @@ class CheckoutCoordinator:
     async def recover_unresolved(self) -> list[OrderAttempt]:
         """Try to settle attempts left by a crash or restart. Returns what is still unresolved."""
         for attempt in unresolved_attempts(self.journal):
+            if attempt.domain != self.domain:
+                continue  # another service's order history cannot settle this attempt
             try:
                 orders = await self.adapter.get_orders(count=ORDER_HISTORY_COUNT)
             except Exception:

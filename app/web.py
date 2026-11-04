@@ -10,6 +10,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from secrets import token_urlsafe
@@ -22,28 +23,32 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.assistant.orchestrator import Assistant, Reply, Workflow
+from app.assistant.router import Domain
+from app.assistant.workflows import OrderWorkflow
 from app.commerce.base import (
+    Address,
     CommerceAdapter,
     CommerceAuthRequired,
     CommerceError,
     CommerceRejected,
+    same_address_id,
 )
-from app.commerce.runtime import checkout_policy, commerce_adapter, order_journal
-from app.commerce.swiggy import SwiggyInstamart
+from app.commerce.runtime import (
+    checkout_policy,
+    commerce_adapter,
+    dining_adapter,
+    food_adapter,
+    order_journal,
+)
+from app.commerce.swiggy import SwiggyMcpClient
 from app.config import Settings, load_settings
+from app.dining.base import DiningAdapter
+from app.dining.workflow import DiningWorkflow
 from app.llm.extractor import GeminiIntentExtractor, IntentExtractionError
 from app.observability import configure_logging, log_event
-from app.orchestrator.state_machine import (
-    CallStarted,
-    Effect,
-    Money,
-    OptionSelected,
-    Say,
-    State,
-    UserCancelled,
-    UserConfirmed,
-)
-from app.orchestrator.turn_runner import ExistingCartConflict, TextTurnRunner
+from app.orchestrator.state_machine import Money, Say
+from app.orchestrator.turn_runner import TextTurnRunner
 from app.voice.gnani import (
     DEFAULT_VOICES,
     SUPPORTED_LANGUAGES,
@@ -75,11 +80,19 @@ class SessionActionRequest(BaseModel):
 
 @dataclass
 class BrowserSession:
-    runner: TextTurnRunner
+    assistant: Assistant
     language: str
     last_activity: float
     lock: asyncio.Lock
     last_reply: str = ""
+
+    @property
+    def runner(self) -> TextTurnRunner:
+        """The grocery order engine, for inspection in tests."""
+        workflow = self.assistant.workflows["grocery"]
+        assert isinstance(workflow, OrderWorkflow)
+        assert workflow.runner is not None
+        return workflow.runner
 
 
 ExtractorFactory = Callable[[], GeminiIntentExtractor]
@@ -101,6 +114,23 @@ def create_app(
     extractor_lock = asyncio.Lock()
     default_extractor: GeminiIntentExtractor | None = None
     shared_adapter: CommerceAdapter | None = None
+    shared_food: dict[str, CommerceAdapter] = {}
+    shared_dining: DiningAdapter | None = None
+
+    def food_for(runtime_settings: Settings, address_id: str) -> CommerceAdapter:
+        if runtime_settings.commerce_backend == "mock":
+            return food_adapter(runtime_settings, address_id)
+        if address_id not in shared_food:
+            shared_food[address_id] = food_adapter(runtime_settings, address_id)
+        return shared_food[address_id]
+
+    def dining_for(runtime_settings: Settings) -> DiningAdapter:
+        nonlocal shared_dining
+        if runtime_settings.commerce_backend == "mock":
+            return dining_adapter(runtime_settings)
+        if shared_dining is None:
+            shared_dining = dining_adapter(runtime_settings)
+        return shared_dining
 
     def adapter_for(runtime_settings: Settings) -> CommerceAdapter:
         """Mock carts are per session; a live account has one cart and one MCP session."""
@@ -130,10 +160,11 @@ def create_app(
         log_event("app_started", mode=runtime_settings.commerce_backend)
         yield
         sessions.clear()
-        if isinstance(shared_adapter, SwiggyInstamart):
-            await shared_adapter.aclose()
+        for client in (shared_adapter, shared_dining, *shared_food.values()):
+            if isinstance(client, SwiggyMcpClient):
+                await client.aclose()
 
-    application = FastAPI(title="Ajji Mart Voice Demo", lifespan=lifespan)
+    application = FastAPI(title="Namma Saathi", lifespan=lifespan)
     application.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @application.middleware("http")
@@ -195,24 +226,42 @@ def create_app(
         runtime_settings = _get_settings(request)
         try:
             extractor = await resolve_extractor()
-            runner = await TextTurnRunner.create(
-                adapter_for(runtime_settings),
+            grocery = adapter_for(runtime_settings)
+            address = _select_address(await grocery.get_addresses(), payload.address_id)
+            journal = order_journal(runtime_settings)
+            policy = checkout_policy(runtime_settings)
+
+            async def build(domain: Domain) -> Workflow:
+                if domain == "dining":
+                    return DiningWorkflow(
+                        dining_for(runtime_settings),
+                        journal,
+                        policy,
+                        today=date.today(),
+                    )
+                adapter = food_for(runtime_settings, address.id) if domain == "food" else grocery
+                return OrderWorkflow(
+                    domain,
+                    adapter,
+                    address_id=address.id,
+                    language=payload.language,
+                    extractor=extractor,
+                    journal=journal,
+                    policy=policy,
+                )
+
+            assistant = Assistant(
+                language=payload.language,
                 extractor=extractor,
-                address_id=payload.address_id,
-                journal=order_journal(runtime_settings),
-                policy=checkout_policy(runtime_settings),
+                factory=build,
+                journal=journal,
+                address_label=address.label,
+                delivery_address=address.full_address,
+                today=date.today(),
             )
-            effects = await runner.dispatch(CallStarted(user_known=True, language=payload.language))
+            reply = await assistant.start()
         except IntentExtractionError as exc:
             raise HTTPException(status_code=503, detail=exc.user_message) from exc
-        except ExistingCartConflict as exc:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Your Swiggy basket is set to a different address. Choose that address, "
-                    "or finish or empty the basket in the Swiggy app. Ajji will not overwrite it."
-                ),
-            ) from exc
         except CommerceAuthRequired as exc:
             raise HTTPException(
                 status_code=503,
@@ -233,7 +282,7 @@ def create_app(
 
         session_id = token_urlsafe(32)
         entry = BrowserSession(
-            runner=runner,
+            assistant=assistant,
             language=payload.language,
             last_activity=time.monotonic(),
             lock=asyncio.Lock(),
@@ -243,7 +292,7 @@ def create_app(
             sessions[session_id] = entry
         return await _response_payload(
             entry,
-            effects,
+            reply,
             runtime_settings,
             tts_factory,
             session_id=session_id,
@@ -286,12 +335,12 @@ def create_app(
                     audio_path.write_bytes(audio_bytes)
                     stt = (stt_factory or _default_stt_factory)(runtime_settings, entry.language)
                     transcript = await stt.transcribe(audio_path)
-                    effects = await entry.runner.dispatch_text(
+                    reply = await entry.assistant.turn(
                         transcript.text, heard=_heard_readback(request, runtime_settings)
                     )
                     return await _response_payload(
                         entry,
-                        effects,
+                        reply,
                         runtime_settings,
                         tts_factory,
                         session_id=session_id,
@@ -302,7 +351,7 @@ def create_app(
             except (IntentExtractionError, CommerceError) as exc:
                 raise HTTPException(
                     status_code=502,
-                    detail="Ajji could not safely process that turn. Please try again.",
+                    detail="Saathi could not safely process that turn. Please try again.",
                 ) from exc
 
     @application.post("/api/session/action", response_model=None)
@@ -320,18 +369,19 @@ def create_app(
                         status_code=422,
                         detail="Review the current cart before confirming it.",
                     )
-                session = entry.runner.session
+                view = entry.assistant.view()
                 stale = (
-                    payload.cart_version != session.readback_version
-                    or payload.cart_hash != session.readback_hash
+                    payload.cart_version != view.readback_version
+                    or payload.cart_hash != view.readback_hash
                 )
-                # A stale page gets a fresh readback from the state machine, never an order.
-                event = UserConfirmed(payload.cart_version, payload.cart_hash)
-                effects = await _dispatch_action(entry, event)
+                # A stale page gets a fresh readback from the workflow, never an order.
+                reply = await _run_action(
+                    entry.assistant.confirm(payload.cart_version, payload.cart_hash)
+                )
                 if stale:
                     refreshed = await _response_payload(
                         entry,
-                        [Say("cart_changed"), *effects],
+                        Reply([Say("cart_changed"), *reply.effects], reply.domain),
                         runtime_settings,
                         tts_factory,
                         session_id=session_id,
@@ -340,12 +390,12 @@ def create_app(
             elif payload.action == "select_option":
                 if payload.option_index is None:
                     raise HTTPException(status_code=422, detail="Choose one of the options.")
-                effects = await _dispatch_action(entry, OptionSelected(payload.option_index))
+                reply = await _run_action(entry.assistant.choose(payload.option_index))
             else:
-                effects = await _dispatch_action(entry, UserCancelled())
+                reply = await _run_action(entry.assistant.cancel())
             return await _response_payload(
                 entry,
-                effects,
+                reply,
                 runtime_settings,
                 tts_factory,
                 session_id=session_id,
@@ -354,15 +404,26 @@ def create_app(
     return application
 
 
-async def _dispatch_action(
-    entry: BrowserSession, event: UserConfirmed | OptionSelected | UserCancelled
-) -> list[Effect]:
+def _select_address(addresses: list[Address], address_id: str | None) -> Address:
+    if not addresses:
+        raise CommerceError("No delivery address available")
+    if address_id is None:
+        if len(addresses) != 1:
+            raise CommerceError("Select a delivery address before starting")
+        return addresses[0]
+    for address in addresses:
+        if same_address_id(address.id, address_id):
+            return address
+    raise CommerceError("Selected delivery address was not found")
+
+
+async def _run_action(action: Awaitable[Reply]) -> Reply:
     try:
-        return await entry.runner.dispatch(event)
+        return await action
     except (IntentExtractionError, CommerceError) as exc:
         raise HTTPException(
             status_code=502,
-            detail="Ajji could not safely process that turn. Please try again.",
+            detail="Saathi could not safely process that turn. Please try again.",
         ) from exc
 
 
@@ -422,9 +483,10 @@ def _default_tts_factory(settings: Settings, language: str) -> TimbreTTS:
 def _session_payload(
     session_id: str, entry: BrowserSession, settings: Settings
 ) -> dict[str, object]:
-    session = entry.runner.session
-    checkout_enabled = settings.commerce_backend == "mock" or settings.allow_real_checkout
-    pending = session.pending
+    view = entry.assistant.view()
+    checkout_enabled = settings.commerce_backend == "mock" or (
+        settings.allow_real_booking if view.domain == "dining" else settings.allow_real_checkout
+    )
     cart = [
         {
             "name": line.name,
@@ -433,27 +495,28 @@ def _session_payload(
             "unit_price_inr": _money_json(line.unit_price_inr),
             "line_total_inr": _money_json(line.quantity * line.unit_price_inr),
         }
-        for line in session.cart
+        for line in view.lines
     ]
     return {
         "session_id": session_id,
-        "state": session.state.value,
+        "capability": view.domain,
+        "state": view.state,
         "language": entry.language,
-        "cart_version": session.cart_version,
-        "cart_hash": session.cart_hash,
+        "cart_version": view.cart_version,
+        "cart_hash": view.cart_hash,
         "cart": cart,
-        "total_inr": _money_json(session.total_inr),
-        "fees_inr": _money_json(session.fees_inr),
-        "savings_inr": _money_json(session.savings_inr),
-        "store_count": session.store_count,
-        "issues": list(session.issues),
-        "address_label": session.address_label,
-        "delivery_address": session.delivery_address,
-        "payment_method": session.payment_method,
+        "total_inr": _money_json(view.total_inr),
+        "fees_inr": _money_json(view.fees_inr),
+        "savings_inr": _money_json(view.savings_inr),
+        "store_count": view.store_count,
+        "issues": list(view.issues),
+        "address_label": view.address_label,
+        "delivery_address": view.delivery_address,
+        "payment_method": view.payment_method,
         "commerce_mode": settings.commerce_backend,
         "checkout_enabled": checkout_enabled,
-        "show_readback": session.state is State.READBACK and bool(session.cart),
-        "can_confirm": checkout_enabled and entry.runner.confirmable,
+        "show_readback": view.state == "READBACK" and bool(view.lines),
+        "can_confirm": checkout_enabled and view.confirmable,
         "options": [
             {
                 "name": option.name,
@@ -461,12 +524,12 @@ def _session_payload(
                 "quantity": option.quantity,
                 "unit_price_inr": _money_json(option.unit_price_inr),
             }
-            for option in (pending.options if pending is not None else ())
+            for option in view.options
         ],
-        "order_ids": list(session.order_ids),
-        "order_status": session.order_status,
-        "order_verified": session.order_verified,
-        "order_partial": session.order_partial,
+        "order_ids": list(view.order_ids),
+        "order_status": view.order_status,
+        "order_verified": view.order_verified,
+        "order_partial": view.order_partial,
         "last_reply": entry.last_reply,
         "tts_language": entry.language,
     }
@@ -474,7 +537,7 @@ def _session_payload(
 
 async def _response_payload(
     entry: BrowserSession,
-    effects: list[Effect],
+    reply: Reply,
     settings: Settings,
     tts_factory: TTSFactory | None,
     *,
@@ -482,7 +545,10 @@ async def _response_payload(
     transcript: str | None = None,
 ) -> dict[str, object]:
     message = response_text(
-        effects, language=entry.language, commerce_mode=settings.commerce_backend
+        reply.effects,
+        language=entry.language,
+        commerce_mode=settings.commerce_backend,
+        domain=reply.domain or "grocery",
     )
     if message:
         entry.last_reply = message  # survives a lost response, e.g. after a placed order
@@ -497,7 +563,7 @@ async def _response_payload(
         except GnaniError:
             audio_error = speech_error_text(entry.language)
         except OSError:
-            audio_error = "Ajji's audio response could not be saved."
+            audio_error = "Saathi's audio response could not be saved."
         except Exception:
             # Speech must never hide what just happened, least of all a placed order.
             logger.exception("Reply synthesis failed")

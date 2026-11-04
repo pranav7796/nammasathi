@@ -16,7 +16,10 @@ from fastapi import FastAPI
 from app.commerce.base import Cart, CartLine, CommerceRejected, RejectionKind
 from app.commerce.mock import MockInstamart
 from app.commerce.order_journal import FileOrderJournal, new_attempt
+from app.commerce.runtime import dining_adapter, food_adapter
 from app.config import Settings, load_settings
+from app.dining.mock import MockDineout
+from app.food.mock import MockFood
 from app.llm.extractor import GeminiIntentExtractor, GroceryIntent, GroceryItem
 from app.orchestrator.checkout import CheckoutPolicy
 from app.orchestrator.state_machine import State
@@ -171,12 +174,14 @@ async def test_browser_session_creation_and_isolation() -> None:
         first_id = str(first["session_id"])
         second_id = str(second["session_id"])
         assert first_id != second_id
-        assert first["assistant_text"] == "ನಮಸ್ಕಾರ. ನಿಮಗೆ ಯಾವ ಸಾಮಾನುಗಳು ಬೇಕು?"
+        assert "ಸಾಥಿ" in str(first["assistant_text"])
         assert first["state"] == State.COLLECTING.value
         assert first["language"] == "kn-IN"
         assert first["address_label"] == "Home"
         assert first["payment_method"] == "COD"
         assert first["audio_base64"] == base64.b64encode(_wav_bytes()).decode("ascii")
+        await app.state.sessions[first_id].assistant.workflow("grocery")
+        await app.state.sessions[second_id].assistant.workflow("grocery")
         first_runner = app.state.sessions[first_id].runner
         second_runner = app.state.sessions[second_id].runner
         assert isinstance(first_runner.adapter, MockInstamart)
@@ -186,7 +191,7 @@ async def test_browser_session_creation_and_isolation() -> None:
         assert second_runner.session.cart == ()
         assert len(services.tts_texts) == 2
         assert services.tts_languages == ["kn-IN", "hi-IN"]
-        assert second["assistant_text"] == "नमस्ते। आपको कौन-सा सामान चाहिए?"
+        assert "साथी" in str(second["assistant_text"])
 
 
 @pytest.mark.asyncio
@@ -329,7 +334,7 @@ async def test_language_switching_between_conversations() -> None:
     [
         ("kn-IN", "ಧ್ವನಿ ಉತ್ತರ ಸಿದ್ಧವಾಗಲಿಲ್ಲ"),
         ("hi-IN", "आवाज़ में जवाब तैयार नहीं हुआ"),
-        ("en-IN", "Ajji could not make an audio reply"),
+        ("en-IN", "Saathi could not make an audio reply"),
     ],
 )
 @pytest.mark.asyncio
@@ -461,9 +466,8 @@ async def test_invalid_audio_and_stt_failure_leave_cart_unchanged() -> None:
         failed = await _upload(client, session_id)
         assert failed.status_code == 502
         assert "temporarily unavailable" in failed.json()["detail"]
-        runner = app.state.sessions[session_id].runner
-        assert runner.session.cart == ()
-        assert runner.adapter.checkout_calls == 0
+        # Neither failure reached a capability, so no cart was even opened.
+        assert app.state.sessions[session_id].assistant.workflows == {}
 
 
 @pytest.mark.asyncio
@@ -668,25 +672,28 @@ async def test_unresolved_attempt_blocks_the_browser_session(
 async def test_existing_cart_for_another_address_is_explained(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    app, shop = _real_app(monkeypatch, _real_settings(tmp_path), [], FakeVoiceServices([]))
+    services = FakeVoiceServices(["rice"])
+    app, shop = _real_app(monkeypatch, _real_settings(tmp_path), [_intent("rice", 2)], services)
     await shop.update_cart(
         "addr_home", [CartLine(spin_id="atta_5kg", sku_id="sku_atta_5kg", quantity=1)]
     )
     shop._cart_address = "addr_elsewhere"  # pyright: ignore[reportPrivateUsage]
 
     async with _local_client(app) as client:
-        response = await client.post("/api/sessions", json={"language": "en-IN"})
+        created = await _create_session(client, "en-IN")
+        turn = (await _upload(client, str(created["session_id"]))).json()
 
-    assert response.status_code == 409
-    assert "will not overwrite" in response.json()["detail"]
+    assert "won't change it" in turn["assistant_text"]
     assert len(shop._cart) == 1  # pyright: ignore[reportPrivateUsage]
+    assert shop._cart[0].sku_id == "sku_atta_5kg"  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_refused_basket_read_is_explained_and_changes_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr("app.orchestrator.turn_runner.START_CART_RETRY_SECONDS", 0)
-    app, shop = _real_app(monkeypatch, _real_settings(tmp_path), [], FakeVoiceServices([]))
+    services = FakeVoiceServices(["rice"])
+    app, shop = _real_app(monkeypatch, _real_settings(tmp_path), [_intent("rice", 2)], services)
 
     async def refused() -> Cart:
         raise CommerceRejected("refused", kind=RejectionKind.NOT_SERVICEABLE)
@@ -694,10 +701,10 @@ async def test_refused_basket_read_is_explained_and_changes_nothing(
     monkeypatch.setattr(shop, "get_cart", refused)
 
     async with _local_client(app) as client:
-        response = await client.post("/api/sessions", json={"language": "en-IN"})
+        created = await _create_session(client, "en-IN")
+        turn = (await _upload(client, str(created["session_id"]))).json()
 
-    assert response.status_code == 503
-    assert "nothing was changed" in response.json()["detail"]
+    assert "could not reach the shop" in turn["assistant_text"]
     assert shop.checkout_calls == 0
 
 
@@ -825,3 +832,97 @@ def test_voices_match_each_language_preference() -> None:
 def _default_voice_for(language: str) -> str:
     settings = load_settings({"GNANI_API_KEY": "k"})
     return _default_tts_factory(settings, language).voice
+
+
+def _dining_intent() -> GroceryIntent:
+    return GroceryIntent(
+        intent="book_table",
+        domain="dining",
+        items=[],
+        query="Italian",
+        area="Bengaluru",
+        date="2030-01-02",
+        time="19:00",
+        guests=2,
+    )
+
+
+async def test_one_conversation_can_book_a_table_through_the_api() -> None:
+    services = FakeVoiceServices(["a table for two"])
+    stt_factory, tts_factory = _speech_factories(services)
+    app = create_app(
+        settings=_settings(),
+        extractor_factory=_extractor_factory([_dining_intent()]),
+        stt_factory=stt_factory,
+        tts_factory=tts_factory,
+    )
+
+    async with _client_for(app) as client:
+        created = await _create_session(client, "en-IN")
+        session_id = str(created["session_id"])
+        assert created["capability"] == ""
+        asked = (await _upload(client, session_id)).json()
+        assert asked["capability"] == "dining"
+        assert asked["state"] == "CHOOSING_RESTAURANT"
+        assert asked["options"][0]["name"] == "Toscano"
+
+        readback = await client.post(
+            "/api/session/action",
+            headers=_session_headers(session_id),
+            json={"action": "select_option", "option_index": 0},
+        )
+        data = readback.json()
+        assert data["state"] == "READBACK"
+        assert data["can_confirm"] is True
+        assert data["payment_method"] == "NONE"
+        assert "free reservation" in data["assistant_text"]
+
+        booked = await client.post(
+            "/api/session/action",
+            headers=_session_headers(session_id),
+            json={
+                "action": "confirm",
+                "cart_version": data["cart_version"],
+                "cart_hash": data["cart_hash"],
+            },
+        )
+
+    assert booked.status_code == 200
+    assert booked.json()["state"] == "DONE"
+    assert booked.json()["order_ids"] == ["DN000001"]
+    assert "demo" in booked.json()["assistant_text"].casefold()
+
+
+async def test_real_booking_stays_off_until_its_own_switch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _real_settings(tmp_path)
+    assert settings.allow_real_checkout is True
+    assert settings.allow_real_booking is False
+    services = FakeVoiceServices(["table"])
+    app, _ = _real_app(monkeypatch, settings, [_dining_intent()], services)
+
+    def fake_dining(_: Settings) -> MockDineout:
+        return MockDineout()
+
+    monkeypatch.setattr("app.web.dining_adapter", fake_dining)
+
+    async with _local_client(app) as client:
+        created = await _create_session(client, "en-IN")
+        session_id = str(created["session_id"])
+        await _upload(client, session_id)
+        readback = await client.post(
+            "/api/session/action",
+            headers=_session_headers(session_id),
+            json={"action": "select_option", "option_index": 0},
+        )
+
+    assert readback.json()["state"] == "READBACK"
+    assert readback.json()["checkout_enabled"] is False
+    assert readback.json()["can_confirm"] is False
+
+
+async def test_mock_mode_uses_only_mock_providers_for_every_capability() -> None:
+    settings = _settings()
+    assert isinstance(food_adapter(settings, "addr"), MockFood)
+    assert isinstance(dining_adapter(settings), MockDineout)

@@ -1,7 +1,7 @@
 "use strict";
 
 const MAX_RECORDING_MS = 30_000;
-const SESSION_STORAGE_KEY = "ajji-mart-session";
+const SESSION_STORAGE_KEY = "namma-saathi-session";
 
 const startPanel = document.querySelector(".home-panel");
 const conversation = document.querySelector("#conversation");
@@ -40,6 +40,7 @@ const orderPanel = document.querySelector("#order-panel");
 const orderResult = document.querySelector("#order-result");
 const orderIds = document.querySelector("#order-ids");
 const catalogueNote = document.querySelector("#catalogue-note");
+const cartHeading = document.querySelector("#cart-heading");
 
 let sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
 let recorder = null;
@@ -77,12 +78,16 @@ languageSelect.addEventListener("change", () => {
   selectedLanguage.textContent = displayLanguage(languageSelect.value);
 });
 
+const CAPABILITY_TITLES = { grocery: "Your groceries", food: "Your meal", dining: "Your table" };
+
 function renderCart(data) {
+  const isDining = data.capability === "dining";
+  cartHeading.textContent = CAPABILITY_TITLES[data.capability] || "Your task";
   cartNode.replaceChildren();
   if (!data.cart.length) {
     const empty = document.createElement("li");
     empty.className = "empty-cart";
-    empty.textContent = "No items yet.";
+    empty.textContent = "Nothing here yet.";
     cartNode.append(empty);
   } else {
     for (const line of data.cart) {
@@ -94,11 +99,12 @@ function renderCart(data) {
       name.textContent = line.name;
       const details = document.createElement("span");
       details.className = "cart-line-details";
-      details.textContent = `${line.quantity} × ${line.pack_size} · ₹${line.unit_price_inr} each`;
+      const pack = line.pack_size ? `${line.pack_size} · ` : "";
+      details.textContent = isDining ? line.pack_size : `${line.quantity} × ${pack}₹${line.unit_price_inr} each`;
       description.append(name, details);
       const lineTotal = document.createElement("span");
       lineTotal.className = "cart-line-total";
-      lineTotal.textContent = `₹${line.line_total_inr}`;
+      lineTotal.textContent = isDining ? "Free" : `₹${line.line_total_inr}`;
       const editButton = document.createElement("button");
       editButton.className = "line-edit-button";
       editButton.type = "button";
@@ -106,18 +112,18 @@ function renderCart(data) {
       editButton.textContent = "Change / remove";
       editButton.setAttribute("aria-label", `Change or remove ${line.name}`);
       editButton.addEventListener("click", () => {
-        recordingInstruction = `Say what you would like to change about ${line.name}, or ask Ajji to remove it.`;
+        recordingInstruction = `Say what you would like to change about ${line.name}, or ask Saathi to remove it.`;
         beginRecording();
       });
       item.append(description, lineTotal, editButton);
       cartNode.append(item);
     }
   }
-  cartTotalNode.textContent = `₹${data.total_inr}`;
+  cartTotalNode.textContent = isDining ? "Nothing to pay" : `₹${data.total_inr}`;
   const isMock = data.commerce_mode !== "swiggy";
   const stateLabels = {
-    COLLECTING: "Ready for your request",
-    CLARIFYING: "Ajji has a question",
+    COLLECTING: "Ready when you are",
+    CLARIFYING: "Saathi has a question",
     READBACK: "Please review",
     CONFIRMED: "Confirmed",
     PLACING: isMock ? "Placing demo order" : "Placing your order",
@@ -141,19 +147,24 @@ function renderCart(data) {
   if (showReadback) {
     for (const line of data.cart) {
       const item = document.createElement("li");
-      item.textContent = `${line.quantity} × ${line.name}, ${line.pack_size} — ₹${line.unit_price_inr} each, ₹${line.line_total_inr} total`;
+      const size = line.pack_size ? `, ${line.pack_size}` : "";
+      item.textContent = isDining
+        ? `${line.name}${size}`
+        : `${line.quantity} × ${line.name}${size} — ₹${line.unit_price_inr} each, ₹${line.line_total_inr} total`;
       confirmationItems.append(item);
     }
     const bill = [
       data.savings_inr ? `saves ₹${data.savings_inr}` : "",
       data.fees_inr ? `fees ₹${data.fees_inr}` : "",
     ].filter(Boolean).join(", ");
-    confirmationTotal.textContent = bill ? `₹${data.total_inr} (${bill})` : `₹${data.total_inr}`;
+    confirmationTotal.textContent = isDining ? "Free reservation" : bill ? `₹${data.total_inr} (${bill})` : `₹${data.total_inr}`;
     confirmationAddress.textContent = data.delivery_address || data.address_label || "No delivery address is set";
     const payment = data.payment_method === "COD"
       ? "Cash on delivery"
       : data.payment_method || "Payment method not set";
-    confirmationPayment.textContent = isMock ? `${payment} (demo only)` : payment;
+    confirmationPayment.textContent = isDining
+      ? "Nothing to pay now"
+      : isMock ? `${payment} (demo only)` : payment;
     if (data.commerce_mode === "swiggy") {
       catalogueNote.textContent = "Prices and pack sizes come from Swiggy Instamart.";
       commerceBadge.textContent = "Swiggy live cart";
@@ -161,14 +172,16 @@ function renderCart(data) {
         ? "Live Swiggy access is enabled. Review every detail before confirming."
         : "Live product and cart access only. Checkout is disabled.";
       confirmationIntro.textContent = data.checkout_enabled
-        ? "Ajji will submit this order to Swiggy only after you explicitly confirm."
+        ? "Saathi will submit this order to Swiggy only after you explicitly confirm."
         : "Live checkout is disabled. This readback will not place an order.";
-      confirmButton.textContent = data.checkout_enabled ? "Confirm real Swiggy order" : "Swiggy checkout disabled";
+      confirmButton.textContent = !data.checkout_enabled
+        ? "Swiggy checkout disabled"
+        : isDining ? "Confirm real table booking" : "Confirm real Swiggy order";
     } else {
       commerceBadge.textContent = "Demo order";
       commerceNote.textContent = "This is a demo. Orders are not sent to a shop.";
-      confirmationIntro.textContent = "Ajji will place this demo order only after you choose Confirm order.";
-      confirmButton.textContent = "Confirm demo order";
+      confirmationIntro.textContent = "Nothing happens until you confirm. This is a demo.";
+      confirmButton.textContent = isDining ? "Confirm demo booking" : "Confirm demo order";
     }
   }
   confirmButton.disabled = busy || !canConfirm;
@@ -184,7 +197,9 @@ function renderOptions(data) {
     button.type = "button";
     button.className = "secondary-button";
     const quantity = option.quantity > 1 ? `${option.quantity} × ` : "";
-    button.textContent = `${index + 1}. ${quantity}${option.name}, ${option.pack_size} — ₹${option.unit_price_inr}`;
+    const size = option.pack_size ? `, ${option.pack_size}` : "";
+    const price = data.capability === "dining" ? "" : ` — ₹${option.unit_price_inr}`;
+    button.textContent = `${index + 1}. ${quantity}${option.name}${size}${price}`;
     button.addEventListener("click", () => sendChoice(index));
     optionsList.append(button);
   });
@@ -195,15 +210,15 @@ function renderOrder(data, isMock) {
   const unknown = data.state === "ORDER_UNKNOWN";
   orderPanel.hidden = !(unknown || (data.state === "DONE" && ids.length > 0));
   if (unknown) {
-    orderResult.textContent = "Ajji could not confirm this order. Please do not order again. Check the Swiggy app.";
+    orderResult.textContent = "Saathi could not confirm this order. Please do not order again. Check the Swiggy app.";
   } else if (isMock) {
     orderResult.textContent = "This was a demo. No real order was placed.";
   } else if (data.order_partial) {
     orderResult.textContent = "Only part of this order was placed. Please check the Swiggy app.";
   } else if (data.order_verified) {
-    orderResult.textContent = `Swiggy shows this order as: ${data.order_status || "placed"}.`;
+    orderResult.textContent = `Swiggy shows this as: ${data.order_status || "placed"}.`;
   } else {
-    orderResult.textContent = "Swiggy reported this order, but Ajji could not check it. Please look in the Swiggy app.";
+    orderResult.textContent = "Swiggy reported this order, but Saathi could not check it. Please look in the Swiggy app.";
   }
   orderIds.textContent = ids.length ? `Order: ${ids.join(", ")}` : "";
 }
@@ -228,7 +243,7 @@ function renderReply(data) {
     audioNode.src = activeAudioUrl;
     audioNode.hidden = false;
     audioNode.play().catch(() => {
-      audioNote.textContent = "Tap Play to hear Ajji's response.";
+      audioNote.textContent = "Tap Play to hear Saathi's response.";
       audioNote.hidden = false;
     });
   } else if (data.audio_error) {
@@ -317,7 +332,7 @@ async function loadAddresses() {
       ? "Live Swiggy access is enabled. Review every detail before confirming."
       : "Live product and cart access only. Checkout is disabled.";
     confirmationIntro.textContent = data.checkout_enabled
-      ? "Ajji will submit this order to Swiggy only after you explicitly confirm."
+      ? "Saathi will submit this order to Swiggy only after you explicitly confirm."
       : "Live checkout is disabled. This readback will not place an order.";
   }
   if (data.addresses.length > 1) {
@@ -396,7 +411,7 @@ async function beginRecording() {
     recordingStatus.classList.add("is-recording");
     recorder.timer = window.setTimeout(() => finishRecording(), MAX_RECORDING_MS);
   } catch (error) {
-    showError(error.message || "Ajji could not use the microphone. Check microphone permission and try again.");
+    showError(error.message || "Saathi could not use the microphone. Check microphone permission and try again.");
   } finally {
     microphonePending = false;
   }
@@ -414,7 +429,7 @@ async function finishRecording() {
   await current.context.close();
   recordButton.setAttribute("aria-pressed", "false");
   recordButton.setAttribute("aria-label", "Start recording");
-  recordLabel.textContent = "Speak to Ajji";
+  recordLabel.textContent = "Speak to Saathi";
   recordingStatus.classList.remove("is-recording");
   recordingStatus.textContent = "Processing your recording…";
   try {
@@ -430,7 +445,7 @@ async function finishRecording() {
 async function uploadTurn(wav) {
   setBusy(true);
   showError("");
-  pageStatus.textContent = "Ajji is listening to your words and preparing a reply…";
+  pageStatus.textContent = "Saathi is listening to your words and preparing a reply…";
   try {
     const data = await requestJson("/api/session/turn", {
       method: "POST",
@@ -460,7 +475,7 @@ async function sendAction(body = {
 }) {
   setBusy(true);
   showError("");
-  pageStatus.textContent = "Ajji is working on it…";
+  pageStatus.textContent = "Saathi is working on it…";
   try {
     const data = await requestJson("/api/session/action", {
       method: "POST",
@@ -515,7 +530,7 @@ confirmButton.addEventListener("click", () => sendAction());
 cancelButton.addEventListener("click", () => sendAction({ action: "cancel" }));
 backButton.addEventListener("click", () => {
   confirmationPanel.hidden = true;
-  pageStatus.textContent = "Tell Ajji what you would like to change.";
+  pageStatus.textContent = "Tell Saathi what you would like to change.";
   recordButton.focus();
 });
 newSessionButton.addEventListener("click", () => {

@@ -14,8 +14,14 @@ from app.commerce.swiggy import (
     SWIGGY_MCP_URL,
     KeyringTokenStorage,
     SwiggyInstamart,
+    food_or_dining_url,
 )
 from app.config import Settings
+from app.dining.base import DiningAdapter
+from app.dining.mock import MockDineout
+from app.dining.swiggy import SwiggyDineout
+from app.food.mock import MockFood
+from app.food.swiggy import SwiggyFood
 from app.orchestrator.checkout import (
     REAL_RECONCILE_DELAYS,
     REAL_REJECTION_DELAYS,
@@ -49,6 +55,40 @@ def commerce_adapter(settings: Settings) -> CommerceAdapter:
         callback_handler=no_interactive_callback,
         allow_real_checkout=settings.allow_real_checkout,
         allow_cart_writes=settings.allow_swiggy_cart_writes,
+    )
+
+
+def food_adapter(settings: Settings, address_id: str) -> CommerceAdapter:
+    if settings.commerce_backend == "mock":
+        return MockFood()
+    if not settings.swiggy_live_access:
+        raise CommerceError("Enable SWIGGY_LIVE_ACCESS for local Swiggy account access")
+    endpoint = food_or_dining_url(settings.swiggy_mcp_url or SWIGGY_MCP_URL, "food")
+    return SwiggyFood(
+        address_id=address_id,
+        endpoint=endpoint,
+        redirect_uri=OAUTH_REDIRECT_URI,
+        # One Swiggy login works across servers, so the stored login is the Instamart one.
+        storage=KeyringTokenStorage(endpoint=settings.swiggy_mcp_url or SWIGGY_MCP_URL),
+        redirect_handler=interactive_login_required,
+        callback_handler=no_interactive_callback,
+        allow_real_checkout=settings.allow_real_checkout,
+        allow_cart_writes=settings.allow_swiggy_cart_writes,
+    )
+
+
+def dining_adapter(settings: Settings) -> DiningAdapter:
+    if settings.commerce_backend == "mock":
+        return MockDineout()
+    if not settings.swiggy_live_access:
+        raise CommerceError("Enable SWIGGY_LIVE_ACCESS for local Swiggy account access")
+    return SwiggyDineout(
+        endpoint=food_or_dining_url(settings.swiggy_mcp_url or SWIGGY_MCP_URL, "dineout"),
+        redirect_uri=OAUTH_REDIRECT_URI,
+        storage=KeyringTokenStorage(endpoint=settings.swiggy_mcp_url or SWIGGY_MCP_URL),
+        redirect_handler=interactive_login_required,
+        callback_handler=no_interactive_callback,
+        allow_real_checkout=settings.allow_real_booking,
     )
 
 

@@ -92,6 +92,7 @@ def test_journal_file_is_private_and_holds_only_allowed_fields(tmp_path: Path) -
         "order_ids",
         "order_status",
         "note",
+        "domain",
     }
 
 

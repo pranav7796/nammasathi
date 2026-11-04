@@ -48,7 +48,6 @@ from app.commerce.base import (
     CartIssue,
     CartItem,
     CartLine,
-    CommerceAdapter,
     CommerceAuthRequired,
     CommerceError,
     CommerceNotAttempted,
@@ -364,14 +363,18 @@ class _ToolRequest:
     future: asyncio.Future[CallToolResult]
 
 
-class SwiggyInstamart(CommerceAdapter):
-    """MCP-backed Instamart adapter with OAuth 2.1 + PKCE.
+class SwiggyMcpClient:
+    """One Swiggy MCP server over OAuth 2.1 + PKCE, limited to an allowlist of tools.
 
     One long-lived MCP session serves all tool calls, as required by
     https://mcp.swiggy.com/builders/docs/operate/rate-limits.md. Its transport
     must be entered and exited by a single task, so a worker task owns it and
     request handlers talk to that worker through a queue.
     """
+
+    allowed_endpoints: frozenset[str] = ALLOWED_MCP_URLS
+    read_tools: frozenset[str] = _READ_TOOLS
+    write_tools: frozenset[str] = _WRITE_TOOLS
 
     def __init__(
         self,
@@ -384,8 +387,8 @@ class SwiggyInstamart(CommerceAdapter):
         allow_real_checkout: bool = False,
         allow_cart_writes: bool | None = None,
     ) -> None:
-        if endpoint not in ALLOWED_MCP_URLS:
-            raise ValueError("Swiggy Instamart endpoint must be https://mcp.swiggy.com/im")
+        if endpoint not in self.allowed_endpoints:
+            raise ValueError(f"Swiggy endpoint must be one of {sorted(self.allowed_endpoints)}")
         if redirect_uri != OAUTH_REDIRECT_URI:
             raise ValueError("Local Swiggy OAuth redirect must be http://localhost")
         self.endpoint = endpoint
@@ -400,7 +403,7 @@ class SwiggyInstamart(CommerceAdapter):
         self._worker: asyncio.Task[None] | None = None
         self._worker_loop: asyncio.AbstractEventLoop | None = None
         metadata = OAuthClientMetadata(
-            client_name="Ajji Mart",
+            client_name="Namma Saathi",
             redirect_uris=[_ANY_URL.validate_python(redirect_uri)],
             scope="mcp:tools",
             token_endpoint_auth_method="none",
@@ -528,7 +531,14 @@ class SwiggyInstamart(CommerceAdapter):
     async def _call_with_message(
         self, name: str, arguments: dict[str, object]
     ) -> tuple[Mapping[str, object], str]:
-        if name not in _READ_TOOLS and name not in _WRITE_TOOLS:
+        data, message, _ = await self._invoke(name, arguments)
+        return data, message
+
+    async def _invoke(
+        self, name: str, arguments: dict[str, object]
+    ) -> tuple[Mapping[str, object], str, str]:
+        """Call a tool; returns (data, message, text). Some live tools only answer in text."""
+        if name not in self.read_tools and name not in self.write_tools:
             raise CommerceNotAttempted(f"Swiggy tool is not allowed: {name}")
         await self._check_token_fresh()
         correlation_id = uuid4().hex
@@ -539,7 +549,7 @@ class SwiggyInstamart(CommerceAdapter):
             result = await self._send(name, arguments, timeout)
             data, message = _parse_result(name, result)
             status = "ok"
-            return data, message
+            return data, message, _result_text(result)
         except SwiggyRejected:
             status = "rejected"
             raise
@@ -610,6 +620,10 @@ class SwiggyInstamart(CommerceAdapter):
                     "get_addresses", "get_addresses response mapping", exc
                 ) from exc
             page += 1
+
+
+class SwiggyInstamart(SwiggyMcpClient):
+    """Instamart behind the domain-level commerce interface."""
 
     async def search_products(self, address_id: str, query: str, offset: int = 0) -> SearchResult:
         if not query.strip():
@@ -728,6 +742,10 @@ class SwiggyInstamart(CommerceAdapter):
         )
 
 
+def _result_text(result: CallToolResult) -> str:
+    return "\n".join(content.text for content in result.content if isinstance(content, TextContent))
+
+
 def _operation_stage(error: Exception, name: str) -> str:
     return _transport_stage(error, f"MCP operation {name}")
 
@@ -790,10 +808,10 @@ def _parse_result(name: str, result: CallToolResult) -> tuple[Mapping[str, objec
         raise diagnostic_from_exception(name, response_stage, exc) from exc
     if payload.get("success") is False:
         _raise_provider_failure(name, response_stage, _provider_error_text(payload))
-    data = payload.get("data") if "data" in payload else payload
+    # Live: an empty Food cart is {"data": null, "statusCode": ...}, so the payload itself is used.
+    data = payload.get("data")
     if not isinstance(data, Mapping):
-        cause = CommerceError(f"Invalid data in Swiggy {name} response")
-        raise diagnostic_from_exception(name, response_stage, cause) from cause
+        data = payload
     message = _optional_str(payload.get("message")) or ""
     return cast(Mapping[str, object], data), message
 
@@ -950,6 +968,11 @@ def _product(raw: Mapping[str, object]) -> Product:
         variants=[_variant(variation) for variation in _list(raw.get("variations"), "variations")],
         promoted=raw.get("isPromoted") is True,
     )
+
+
+def food_or_dining_url(instamart_url: str, server: str) -> str:
+    """The same environment's URL for another Swiggy server (/food or /dineout)."""
+    return instamart_url.rsplit("/", maxsplit=1)[0] + f"/{server}"
 
 
 def _item_total_from_bill(breakdown: Mapping[str, object]) -> Decimal | None:

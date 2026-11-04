@@ -34,7 +34,7 @@ const selectors = [
   "#confirmation-address", "#confirmation-payment", "#confirm-note", "#back-button",
   "#new-session-button", "#page-status", "#language-status", "#delivery-address", "#address-help",
   "#commerce-badge", "#commerce-note", "#confirmation-intro", "#cancel-button", "#options-panel",
-  "#options-list", "#order-panel", "#order-result", "#order-ids", "#catalogue-note",
+  "#options-list", "#order-panel", "#order-result", "#order-ids", "#catalogue-note", "#cart-heading",
 ];
 const initialCart = [
   { name: "Sona Masoori Rice", pack_size: "1 kg", quantity: 2, unit_price_inr: 78, line_total_inr: 156 },
@@ -50,7 +50,7 @@ function payload(overrides = {}) {
 }
 function makeApp({ savedSession = null, getPayload = payload(), postPayload = payload(), holdTurn = false, actionPayload = payload({ state: "DONE", can_confirm: false, show_readback: false, cart: initialCart }) } = {}) {
   const elements = Object.fromEntries(selectors.map((selector) => [selector, new Element(selector)]));
-  const storage = new Map(savedSession ? [["ajji-mart-session", savedSession]] : []);
+  const storage = new Map(savedSession ? [["namma-saathi-session", savedSession]] : []);
   const calls = [];
   const processors = [];
   let releaseTurn;
@@ -106,7 +106,7 @@ test("start creates and stores a session, then enters the listening state", asyn
   const app = makeApp({ getPayload: payload({ state: "COLLECTING", cart: [], can_confirm: false }), postPayload: payload({ state: "COLLECTING", cart: [], can_confirm: false }) });
   await app.elements["#start-button"].click();
   await tick();
-  assert.equal(app.storage.get("ajji-mart-session"), "session-123");
+  assert.equal(app.storage.get("namma-saathi-session"), "session-123");
   assert.equal(app.elements["#conversation"].hidden, false);
   assert.equal(app.elements["#record-button"].attributes["aria-pressed"], "true");
   assert.match(app.elements["#recording-status"].textContent, /Recording/);
@@ -288,4 +288,37 @@ test("a restored page shows the last reply it may have missed", async () => {
   });
   await tick();
   assert.equal(app.elements["#assistant-text"].textContent, "Your order is placed.");
+});
+
+test("a table booking reads as a booking, with nothing to pay", async () => {
+  const app = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({
+      capability: "dining", commerce_mode: "swiggy", payment_method: "NONE", total_inr: 0,
+      cart: [{ name: "Toscano", pack_size: "2026-11-06 at 07:00 PM, table for 2", quantity: 1, unit_price_inr: 0, line_total_inr: 0 }],
+    }),
+  });
+  await tick();
+  assert.equal(app.elements["#cart-heading"].textContent, "Your table");
+  assert.equal(app.elements["#cart-total"].textContent, "Nothing to pay");
+  assert.equal(app.elements["#confirm-button"].textContent, "Confirm real table booking");
+  assert.equal(app.elements["#confirmation-payment"].textContent, "Nothing to pay now");
+  assert.match(app.elements["#confirmation-items"].children[0].textContent, /Toscano, 2026-11-06/);
+  assert.doesNotMatch(app.elements["#confirmation-items"].children[0].textContent, /₹/);
+});
+
+test("restaurant options show no price and dishes with no size show no stray comma", async () => {
+  const dining = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({ capability: "dining", state: "CHOOSING_RESTAURANT", can_confirm: false, show_readback: false, options: [{ name: "Toscano", pack_size: "Indiranagar", quantity: 1, unit_price_inr: 0 }] }),
+  });
+  await tick();
+  assert.equal(dining.elements["#options-list"].children[0].textContent, "1. Toscano, Indiranagar");
+  const food = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({ capability: "food", state: "CLARIFYING", can_confirm: false, show_readback: false, options: [{ name: "Masala Dosa from Vidyarthi Bhavan", pack_size: "", quantity: 1, unit_price_inr: 90 }] }),
+  });
+  await tick();
+  assert.equal(food.elements["#options-list"].children[0].textContent, "1. Masala Dosa from Vidyarthi Bhavan — ₹90");
+  assert.equal(food.elements["#cart-heading"].textContent, "Your meal");
 });

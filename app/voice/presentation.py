@@ -8,7 +8,33 @@ from app.orchestrator.state_machine import Effect, Say, format_money
 
 _PHRASES: dict[str, dict[str, str]] = {
     "en-IN": {
-        "greeting": "Hello. What groceries would you like?",
+        "greeting": "Hello, I'm Saathi. What can I take care of for you? Groceries, a meal, or a table?",
+        "ask_domain": "Sure. Do you need groceries, a meal delivered, or a table at a restaurant?",
+        "switched_domain": "I'll keep that safe for you, and we can come back to it.",
+        "cart_other_address": "Your Swiggy basket is set to another address, so I won't change it. Please check the Swiggy app.",
+        "dining_ask_query": "Happy to book a table. What kind of food, or which restaurant?",
+        "dining_ask_area": "Which city or area should I look in?",
+        "dining_area_unknown": "I don't know that place yet. Could you say Bengaluru, Koramangala, Indiranagar, Mumbai, or Delhi?",
+        "dining_ask_date": "Which day would you like?",
+        "dining_ask_time": "What time would you like?",
+        "dining_ask_guests": "How many people?",
+        "dining_none_found": "I couldn't find a match there. What else would you like to try?",
+        "dining_no_free_slots": "That restaurant has no free reservation that day. Shall we try another?",
+        "dining_time_unavailable": "That exact time isn't available.",
+        "dining_option_restaurant": "I found these.",
+        "dining_option_slot": "These times are close.",
+        "dining_option": "{position}, {name}, {detail}.",
+        "dining_readback": "A table for {guests} at {restaurant}, {area}, on {date} at {time}. It's a free reservation, with nothing to pay now. Shall I book it?",
+        "dining_booked": "Your demo table is booked. This was not a real booking.",
+        "dining_booked_real": "Your table is booked and I've checked it with Swiggy.",
+        "dining_booking_unverified": "Your demo table was booked, but I could not check it.",
+        "dining_booking_unverified_real": "Swiggy reported your table as booked, but I could not check it yet. Please look in the Swiggy app and don't book again.",
+        "dining_booking_problem": "There is a problem with your demo booking.",
+        "dining_booking_problem_real": "Swiggy shows a problem with this booking. Please check the Swiggy app.",
+        "dining_booking_refused": "Swiggy didn't accept that booking, and nothing was booked. Let me check the times again.",
+        "dining_already_booked": "That table is already booked.",
+        "dining_cancelled": "All right, I've dropped that table request.",
+        "dining_cancel_elsewhere": "To cancel, please use the Swiggy app, or call customer care at 080-67466729.",
         "filler_search": "One moment, I am checking that.",
         "pack_confirm": "I used the requested quantity across these packs.",
         "confirm_reask": "Would you like me to place this order? Please say yes or no.",
@@ -91,7 +117,33 @@ _PHRASES: dict[str, dict[str, str]] = {
         "issue_other": "Swiggy reports a problem with it, so I cannot order it yet.",
     },
     "hi-IN": {
-        "greeting": "नमस्ते। आपको कौन-सा सामान चाहिए?",
+        "greeting": "नमस्ते, मैं साथी हूँ। आज क्या काम कर दूँ? किराना, खाना, या रेस्तराँ में टेबल?",
+        "ask_domain": "ज़रूर। आपको किराना चाहिए, घर पर खाना, या रेस्तराँ में टेबल?",
+        "switched_domain": "वह मैंने संभालकर रखा है, हम उस पर वापस आ सकते हैं।",
+        "cart_other_address": "आपकी स्विगी टोकरी किसी और पते के लिए है, इसलिए मैं उसे नहीं बदलूँगी। कृपया स्विगी ऐप देखें।",
+        "dining_ask_query": "टेबल बुक कर देती हूँ। कैसा खाना, या कौन-सा रेस्तराँ?",
+        "dining_ask_area": "किस शहर या इलाके में देखूँ?",
+        "dining_area_unknown": "वह जगह मुझे अभी नहीं पता। बेंगलुरु, कोरमंगला, इंदिरानगर, मुंबई या दिल्ली में से बताइए।",
+        "dining_ask_date": "किस दिन के लिए?",
+        "dining_ask_time": "कितने बजे?",
+        "dining_ask_guests": "कितने लोग होंगे?",
+        "dining_none_found": "वहाँ कुछ नहीं मिला। और क्या देखूँ?",
+        "dining_no_free_slots": "उस दिन वहाँ मुफ़्त बुकिंग नहीं है। कोई और देखें?",
+        "dining_time_unavailable": "ठीक वह समय उपलब्ध नहीं है।",
+        "dining_option_restaurant": "ये मिले हैं।",
+        "dining_option_slot": "ये समय पास में हैं।",
+        "dining_option": "{position}, {name}, {detail}।",
+        "dining_readback": "{restaurant}, {area} में {guests} लोगों की टेबल, {date} को {time} बजे। यह मुफ़्त बुकिंग है, अभी कुछ नहीं देना। क्या बुक कर दूँ?",
+        "dining_booked": "आपकी डेमो टेबल बुक हो गई। यह असली बुकिंग नहीं थी।",
+        "dining_booked_real": "आपकी टेबल बुक हो गई है और मैंने स्विगी से इसकी जाँच कर ली है।",
+        "dining_booking_unverified": "आपकी डेमो टेबल बुक हुई, पर मैं जाँच नहीं कर पाई।",
+        "dining_booking_unverified_real": "स्विगी के अनुसार टेबल बुक हो गई है, पर मैं अभी जाँच नहीं कर पाई। कृपया ऐप देखें और दोबारा बुक न करें।",
+        "dining_booking_problem": "आपकी डेमो बुकिंग में समस्या है।",
+        "dining_booking_problem_real": "स्विगी इस बुकिंग में समस्या दिखा रहा है। कृपया ऐप देखें।",
+        "dining_booking_refused": "स्विगी ने बुकिंग स्वीकार नहीं की, कोई बुकिंग नहीं हुई। मैं समय फिर से देखती हूँ।",
+        "dining_already_booked": "वह टेबल पहले ही बुक है।",
+        "dining_cancelled": "ठीक है, वह टेबल की बात छोड़ दी।",
+        "dining_cancel_elsewhere": "रद्द करने के लिए स्विगी ऐप देखें, या कस्टमर केयर को 080-67466729 पर फ़ोन करें।",
         "filler_search": "एक पल, मैं देख रही हूँ।",
         "pack_confirm": "आपकी बताई मात्रा इन पैकों में जोड़ दी है।",
         "confirm_reask": "क्या मैं यह ऑर्डर कर दूँ? कृपया हाँ या नहीं कहें।",
@@ -163,7 +215,33 @@ _PHRASES: dict[str, dict[str, str]] = {
         "issue_other": "स्विगी इसमें समस्या बता रहा है, इसलिए मैं अभी ऑर्डर नहीं कर सकती।",
     },
     "kn-IN": {
-        "greeting": "ನಮಸ್ಕಾರ. ನಿಮಗೆ ಯಾವ ಸಾಮಾನುಗಳು ಬೇಕು?",
+        "greeting": "ನಮಸ್ಕಾರ, ನಾನು ಸಾಥಿ. ಇವತ್ತು ಏನು ಕೆಲಸ ಮಾಡಿಕೊಡಲಿ? ದಿನಸಿ, ಊಟ, ಅಥವಾ ಹೋಟೆಲ್‌ನಲ್ಲಿ ಟೇಬಲ್?",
+        "ask_domain": "ಖಂಡಿತ. ನಿಮಗೆ ದಿನಸಿ ಬೇಕೇ, ಮನೆಗೆ ಊಟ ಬೇಕೇ, ಅಥವಾ ಹೋಟೆಲ್‌ನಲ್ಲಿ ಟೇಬಲ್ ಬೇಕೇ?",
+        "switched_domain": "ಅದನ್ನು ಹಾಗೆಯೇ ಇಟ್ಟಿದ್ದೇನೆ, ಮತ್ತೆ ಅದಕ್ಕೆ ಬರಬಹುದು.",
+        "cart_other_address": "ನಿಮ್ಮ ಸ್ವಿಗ್ಗಿ ಬುಟ್ಟಿ ಬೇರೆ ವಿಳಾಸಕ್ಕೆ ಇದೆ, ಅದನ್ನು ಬದಲಾಯಿಸುವುದಿಲ್ಲ. ದಯವಿಟ್ಟು ಸ್ವಿಗ್ಗಿ ಆ್ಯಪ್ ನೋಡಿ.",
+        "dining_ask_query": "ಟೇಬಲ್ ಬುಕ್ ಮಾಡುತ್ತೇನೆ. ಯಾವ ತರಹದ ಊಟ, ಅಥವಾ ಯಾವ ಹೋಟೆಲ್?",
+        "dining_ask_area": "ಯಾವ ಊರು ಅಥವಾ ಏರಿಯಾದಲ್ಲಿ ನೋಡಲಿ?",
+        "dining_area_unknown": "ಆ ಜಾಗ ನನಗೆ ಇನ್ನೂ ಗೊತ್ತಿಲ್ಲ. ಬೆಂಗಳೂರು, ಕೋರಮಂಗಲ, ಇಂದಿರಾನಗರ, ಮುಂಬೈ ಅಥವಾ ದೆಹಲಿ ಎಂದು ಹೇಳಿ.",
+        "dining_ask_date": "ಯಾವ ದಿನಕ್ಕೆ?",
+        "dining_ask_time": "ಎಷ್ಟು ಗಂಟೆಗೆ?",
+        "dining_ask_guests": "ಎಷ್ಟು ಜನ?",
+        "dining_none_found": "ಅಲ್ಲಿ ಏನೂ ಸಿಗಲಿಲ್ಲ. ಬೇರೆ ಏನು ನೋಡಲಿ?",
+        "dining_no_free_slots": "ಆ ದಿನ ಅಲ್ಲಿ ಉಚಿತ ಬುಕಿಂಗ್ ಇಲ್ಲ. ಬೇರೆ ಕಡೆ ನೋಡೋಣವೇ?",
+        "dining_time_unavailable": "ಅದೇ ಸಮಯ ಲಭ್ಯವಿಲ್ಲ.",
+        "dining_option_restaurant": "ಇವು ಸಿಕ್ಕಿವೆ.",
+        "dining_option_slot": "ಈ ಸಮಯಗಳು ಹತ್ತಿರ ಇವೆ.",
+        "dining_option": "{position}, {name}, {detail}.",
+        "dining_readback": "{restaurant}, {area} ನಲ್ಲಿ {guests} ಜನರಿಗೆ ಟೇಬಲ್, {date} ರಂದು {time} ಕ್ಕೆ. ಇದು ಉಚಿತ ಬುಕಿಂಗ್, ಈಗ ಏನೂ ಕೊಡಬೇಕಿಲ್ಲ. ಬುಕ್ ಮಾಡಲೇ?",
+        "dining_booked": "ನಿಮ್ಮ ಡೆಮೊ ಟೇಬಲ್ ಬುಕ್ ಆಗಿದೆ. ಇದು ನಿಜವಾದ ಬುಕಿಂಗ್ ಅಲ್ಲ.",
+        "dining_booked_real": "ನಿಮ್ಮ ಟೇಬಲ್ ಬುಕ್ ಆಗಿದೆ ಮತ್ತು ಸ್ವಿಗ್ಗಿಯಲ್ಲಿ ಪರಿಶೀಲಿಸಿದ್ದೇನೆ.",
+        "dining_booking_unverified": "ನಿಮ್ಮ ಡೆಮೊ ಟೇಬಲ್ ಬುಕ್ ಆಗಿದೆ, ಆದರೆ ಪರಿಶೀಲಿಸಲು ಆಗಲಿಲ್ಲ.",
+        "dining_booking_unverified_real": "ಸ್ವಿಗ್ಗಿ ಪ್ರಕಾರ ಟೇಬಲ್ ಬುಕ್ ಆಗಿದೆ, ಆದರೆ ಪರಿಶೀಲಿಸಲು ಆಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಆ್ಯಪ್ ನೋಡಿ, ಮತ್ತೆ ಬುಕ್ ಮಾಡಬೇಡಿ.",
+        "dining_booking_problem": "ನಿಮ್ಮ ಡೆಮೊ ಬುಕಿಂಗ್‌ನಲ್ಲಿ ಸಮಸ್ಯೆ ಇದೆ.",
+        "dining_booking_problem_real": "ಸ್ವಿಗ್ಗಿ ಈ ಬುಕಿಂಗ್‌ನಲ್ಲಿ ಸಮಸ್ಯೆ ತೋರಿಸುತ್ತಿದೆ. ದಯವಿಟ್ಟು ಆ್ಯಪ್ ನೋಡಿ.",
+        "dining_booking_refused": "ಸ್ವಿಗ್ಗಿ ಬುಕಿಂಗ್ ಸ್ವೀಕರಿಸಲಿಲ್ಲ, ಏನೂ ಬುಕ್ ಆಗಿಲ್ಲ. ಸಮಯ ಮತ್ತೆ ನೋಡುತ್ತೇನೆ.",
+        "dining_already_booked": "ಆ ಟೇಬಲ್ ಈಗಾಗಲೇ ಬುಕ್ ಆಗಿದೆ.",
+        "dining_cancelled": "ಸರಿ, ಆ ಟೇಬಲ್ ವಿಷಯ ಬಿಟ್ಟಿದ್ದೇನೆ.",
+        "dining_cancel_elsewhere": "ರದ್ದು ಮಾಡಲು ಸ್ವಿಗ್ಗಿ ಆ್ಯಪ್ ನೋಡಿ, ಅಥವಾ ಗ್ರಾಹಕ ಸೇವೆಗೆ 080-67466729 ಕರೆ ಮಾಡಿ.",
         "filler_search": "ಒಂದು ಕ್ಷಣ, ನಾನು ಪರಿಶೀಲಿಸುತ್ತೇನೆ.",
         "pack_confirm": "ನೀವು ಕೇಳಿದ ಪ್ರಮಾಣಕ್ಕೆ ಈ ಪ್ಯಾಕ್‌ಗಳನ್ನು ಸೇರಿಸಿದ್ದೇನೆ.",
         "confirm_reask": "ಈ ಆರ್ಡರ್ ಮಾಡಬೇಕೇ? ದಯವಿಟ್ಟು ಹೌದು ಅಥವಾ ಬೇಡ ಎಂದು ಹೇಳಿ.",
@@ -236,13 +314,67 @@ _PHRASES: dict[str, dict[str, str]] = {
     },
 }
 
+# Only what must sound different for a restaurant meal; everything else is shared.
+_FOOD_PHRASES: dict[str, dict[str, str]] = {
+    "en-IN": {
+        "existing_cart": "Your Swiggy food cart already has something in it. I will keep it.",
+        "ask_what_to_add": "What would you like to eat?",
+        "clarification_need_details": "Sure. What do you feel like eating?",
+        "clarification_pack_size": "Which {item} would you like?",
+        "clarification_ambiguous_item": "I found a few for {item}. Which do you want?",
+        "clarification_not_found": "I couldn't find {item}. What else would you like?",
+        "readback": (
+            "Your order is {lines}. {savings}{fees}The total is ₹{total}. {stores}"
+            "Payment is cash on delivery. Delivery address: {address}. Shall I place this order?"
+        ),
+        "order_placed": "Your demo meal is ordered. This was not a real order.",
+        "order_placed_real": "Your Swiggy order is placed and I have checked it with Swiggy.",
+    },
+    "hi-IN": {
+        "existing_cart": "आपकी स्विगी फ़ूड कार्ट में पहले से कुछ है। मैं उसे रखूँगी।",
+        "ask_what_to_add": "आप क्या खाना चाहेंगे?",
+        "clarification_need_details": "ज़रूर। आपका क्या खाने का मन है?",
+        "clarification_pack_size": "कौन-सा {item} चाहिए?",
+        "clarification_ambiguous_item": "{item} के कुछ विकल्प मिले। आपको कौन-सा चाहिए?",
+        "clarification_not_found": "{item} नहीं मिला। और क्या लेंगे?",
+        "readback": (
+            "आपके ऑर्डर में {lines} हैं। {savings}{fees}कुल ₹{total} हैं। {stores}"
+            "भुगतान सामान मिलने पर नकद है। पता: {address}। क्या मैं यह ऑर्डर कर दूँ?"
+        ),
+        "order_placed": "आपका डेमो खाना ऑर्डर हो गया। यह असली ऑर्डर नहीं था।",
+        "order_placed_real": "आपका स्विगी ऑर्डर हो गया है और मैंने स्विगी से इसकी जाँच कर ली है।",
+    },
+    "kn-IN": {
+        "existing_cart": "ನಿಮ್ಮ ಸ್ವಿಗ್ಗಿ ಫುಡ್ ಕಾರ್ಟ್‌ನಲ್ಲಿ ಈಗಾಗಲೇ ಏನೋ ಇದೆ. ಅದನ್ನು ಹಾಗೆಯೇ ಇಡುತ್ತೇನೆ.",
+        "ask_what_to_add": "ಏನು ತಿನ್ನಬೇಕು?",
+        "clarification_need_details": "ಖಂಡಿತ. ಏನು ತಿನ್ನುವ ಮನಸ್ಸಿದೆ?",
+        "clarification_pack_size": "ಯಾವ {item} ಬೇಕು?",
+        "clarification_ambiguous_item": "{item} ಕೆಲವು ಸಿಕ್ಕಿವೆ. ಯಾವುದು ಬೇಕು?",
+        "clarification_not_found": "{item} ಸಿಗಲಿಲ್ಲ. ಬೇರೆ ಏನು ಬೇಕು?",
+        "readback": (
+            "ನಿಮ್ಮ ಆರ್ಡರ್‌ನಲ್ಲಿ {lines} ಇವೆ. {savings}{fees}ಒಟ್ಟು ₹{total}. {stores}"
+            "ಪಾವತಿ ಸಾಮಾನು ಬಂದಾಗ ನಗದು. ವಿಳಾಸ: {address}. ಈ ಆರ್ಡರ್ ಮಾಡಲೇ?"
+        ),
+        "order_placed": "ನಿಮ್ಮ ಡೆಮೊ ಊಟ ಆರ್ಡರ್ ಆಗಿದೆ. ಇದು ನಿಜವಾದ ಆರ್ಡರ್ ಅಲ್ಲ.",
+        "order_placed_real": "ನಿಮ್ಮ ಸ್ವಿಗ್ಗಿ ಆರ್ಡರ್ ಆಗಿದೆ ಮತ್ತು ಸ್ವಿಗ್ಗಿಯಲ್ಲಿ ಪರಿಶೀಲಿಸಿದ್ದೇನೆ.",
+    },
+}
+
 _POSITIONS: dict[str, tuple[str, ...]] = {
     "en-IN": ("First", "Second", "Third"),
     "hi-IN": ("पहला", "दूसरा", "तीसरा"),
     "kn-IN": ("ಮೊದಲನೆಯದು", "ಎರಡನೆಯದು", "ಮೂರನೆಯದು"),
 }
 _REAL_VARIANTS = frozenset(
-    {"order_placed", "order_placed_unverified", "order_partial", "order_problem"}
+    {
+        "order_placed",
+        "order_placed_unverified",
+        "order_partial",
+        "order_problem",
+        "dining_booked",
+        "dining_booking_unverified",
+        "dining_booking_problem",
+    }
 )
 
 
@@ -261,7 +393,7 @@ def _render_lines(say: Say, phrases: dict[str, str]) -> str:
                 pack=_spoken_pack(line.pack_size),
                 name=line.name,
                 price=format_money(line.unit_price_inr),
-            )
+            ).strip()
         )
     return "; ".join(parts)
 
@@ -287,12 +419,14 @@ def _render_clarification(say: Say, phrases: dict[str, str], language: str) -> s
     positions = _POSITIONS[language]
     for position, option in zip(positions, say.lines, strict=False):
         parts.append(
-            phrases["option"].format(
+            phrases["option"]
+            .format(
                 position=position,
                 name=option.name,
                 pack=_spoken_pack(option.pack_size),
                 price=format_money(option.unit_price_inr),
             )
+            .replace(", ,", ",")
             + "."
         )
     if say.lines:
@@ -300,7 +434,21 @@ def _render_clarification(say: Say, phrases: dict[str, str], language: str) -> s
     return " ".join(parts)
 
 
-def response_text(effects: list[Effect], *, language: str, commerce_mode: str) -> str:
+def _render_dining_options(say: Say, phrases: dict[str, str], language: str) -> str:
+    parts = [phrases[f"dining_option_{say.data.get('kind', 'restaurant')}"]]
+    for position, option in zip(_POSITIONS[language], say.lines, strict=False):
+        parts.append(
+            phrases["dining_option"].format(
+                position=position, name=option.name, detail=option.pack_size
+            )
+        )
+    parts.append(phrases["options_prompt"])
+    return " ".join(parts)
+
+
+def response_text(
+    effects: list[Effect], *, language: str, commerce_mode: str, domain: str = "grocery"
+) -> str:
     """Render only application-owned language templates, never model error prose.
 
     `commerce_mode` is required so a real order can never be described as a demo,
@@ -309,6 +457,8 @@ def response_text(effects: list[Effect], *, language: str, commerce_mode: str) -
     phrases = _PHRASES.get(language)
     if phrases is None:
         raise ValueError("Language must be kn-IN, hi-IN, or en-IN")
+    if domain == "food":
+        phrases = {**phrases, **_FOOD_PHRASES[language]}
 
     says = [effect for effect in effects if isinstance(effect, Say)]
     # Replies are spoken after the work is finished, so "one moment" only makes sense alone.
@@ -331,8 +481,12 @@ def response_text(effects: list[Effect], *, language: str, commerce_mode: str) -
             )
         elif effect.template == "clarification":
             parts.append(_render_clarification(effect, phrases, language))
+        elif effect.template == "dining_options":
+            parts.append(_render_dining_options(effect, phrases, language))
+        elif effect.template == "dining_readback":
+            parts.append(phrases["dining_readback"].format(**effect.data))
         elif effect.template in _REAL_VARIANTS and commerce_mode != "mock":
-            parts.append(phrases[f"{effect.template}_real"])
+            parts.append(phrases.get(f"{effect.template}_real", phrases["intent_error"]))
         else:
             parts.append(phrases.get(effect.template, phrases["intent_error"]))
     return " ".join(part for part in parts if part).strip()
@@ -343,5 +497,5 @@ def speech_error_text(language: str) -> str:
     return {
         "kn-IN": "ಧ್ವನಿ ಉತ್ತರ ಸಿದ್ಧವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಮೇಲಿನ ಉತ್ತರವನ್ನು ಓದಿ.",
         "hi-IN": "आवाज़ में जवाब तैयार नहीं हुआ। कृपया ऊपर लिखा जवाब पढ़ें।",
-        "en-IN": "Ajji could not make an audio reply. Please read the message above.",
+        "en-IN": "Saathi could not make an audio reply. Please read the message above.",
     }[language]

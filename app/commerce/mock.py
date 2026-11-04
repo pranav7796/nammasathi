@@ -139,6 +139,10 @@ CATALOG: list[Product] = [
 class MockInstamart:
     """Implements CommerceAdapter. Single-user, in-memory."""
 
+    catalog: list[Product] = CATALOG
+    min_order_inr = MIN_ORDER_INR
+    delivery_fee_inr = DELIVERY_FEE_INR
+
     def __init__(self, *, now: datetime | None = None) -> None:
         self.addresses = [
             Address(
@@ -166,7 +170,7 @@ class MockInstamart:
         return self._now or datetime.now(UTC)
 
     def _variant(self, spin_id: str) -> tuple[Product, Variant]:
-        for p in CATALOG:
+        for p in self.catalog:
             for v in p.variants:
                 if v.spin_id == spin_id:
                     return p, v
@@ -182,10 +186,12 @@ class MockInstamart:
         total = sum((i.line_total_inr for i in self._cart), Decimal(0))
         errors: list[str] = []
         issues: list[CartIssue] = []
-        if self._cart and total < MIN_ORDER_INR:
-            errors.append(f"Minimum order not met: add items worth ₹{MIN_ORDER_INR - total} more")
+        if self._cart and total < self.min_order_inr:
+            errors.append(
+                f"Minimum order not met: add items worth ₹{self.min_order_inr - total} more"
+            )
             issues.append(CartIssue.MIN_ORDER)
-        fee = Decimal(DELIVERY_FEE_INR if self._cart else 0)
+        fee = Decimal(self.delivery_fee_inr if self._cart else 0)
         return Cart(
             address_id=self._cart_address,
             delivery_label=next(
@@ -222,17 +228,19 @@ class MockInstamart:
             raise CommerceError("Missing query")
         q = catalogue_term(q).casefold()
         hits = [
-            p for p in CATALOG if q in p.display_name.lower() or q in p.brand.lower() or q in p.id
+            p
+            for p in self.catalog
+            if q in p.display_name.lower() or q in p.brand.lower() or q in p.id
         ]
         similar: list[Product] = []
         if hits and not any(v.in_stock for p in hits for v in p.variants):
-            similar = [p for p in CATALOG if p.id in {"p_ragi", "p_jaggery"}][:2]
+            similar = [p for p in self.catalog if p.id in {"p_ragi", "p_jaggery"}][:2]
         return SearchResult(products=hits[offset:], similar_products=similar)
 
     async def go_to_items(self, address_id: str) -> list[Product]:
         self._check_address(address_id)
         ids = {"p_milk", "p_curd", "p_bread", "p_banana"}
-        return [p for p in CATALOG if p.id in ids]
+        return [p for p in self.catalog if p.id in ids]
 
     async def update_cart(self, address_id: str, items: list[CartLine]) -> Cart:
         self._check_address(address_id)
