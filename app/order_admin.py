@@ -64,7 +64,7 @@ def resolve(attempt_id: str, outcome: str, order_id: str | None) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ajji Mart order attempt journal")
+    parser = argparse.ArgumentParser(description="Namma Saathi order attempt journal")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     resolver = commands.add_parser("resolve")

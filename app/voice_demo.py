@@ -55,7 +55,7 @@ async def run(audio_paths: list[Path], output_dir: Path, language: str) -> None:
             print(f"You said: {transcript.text}")
             effects = await runner.dispatch_text(transcript.text)
             message = response_text(effects, language=language, commerce_mode="mock")
-            print(f"Ajji: {message}")
+            print(f"Saathi: {message}")
             if message:
                 turn += 1
                 wav_path = await tts.synthesize(message, output_dir / f"response-{turn:03d}.wav")
@@ -65,7 +65,7 @@ async def run(audio_paths: list[Path], output_dir: Path, language: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ajji Mart Gnani REST voice demo")
+    parser = argparse.ArgumentParser(description="Namma Saathi Gnani REST voice demo")
     parser.add_argument("audio", nargs="*", type=Path, help="Initial audio file turn(s)")
     parser.add_argument("--output-dir", type=Path, default=Path("voice-output"))
     parser.add_argument(

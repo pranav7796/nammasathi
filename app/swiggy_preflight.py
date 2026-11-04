@@ -71,7 +71,7 @@ async def run(settings: Settings, report: Report) -> None:
         if cart.items:
             report.note(
                 f"cart holds {len(cart.items)} line(s) from {cart.store_count} store(s); "
-                "Ajji keeps them and reads them back"
+                "Saathi keeps them and reads them back"
             )
             report.check(
                 any(same_address_id(cart.address_id, address.id) for address in addresses),

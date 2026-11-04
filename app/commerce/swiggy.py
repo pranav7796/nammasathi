@@ -711,7 +711,7 @@ class SwiggyInstamart(SwiggyMcpClient):
                 "Duplicate checkout requires a separate confirmed recovery flow"
             )
         if payment_method is not PaymentMethod.COD:
-            raise CommerceNotAttempted("Ajji only places cash-on-delivery orders")
+            raise CommerceNotAttempted("Saathi only places cash-on-delivery orders")
         if not same_address_id(address_id, self._last_cart_address_id):
             raise CommerceNotAttempted(
                 "Refresh the cart for the selected delivery address before checkout"

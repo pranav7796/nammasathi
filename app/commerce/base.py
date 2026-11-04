@@ -133,7 +133,7 @@ class Cart(BaseModel):
 
 
 class PaymentOptions(BaseModel):
-    """Live payment facts for the current cart. Ajji only offers cash on delivery."""
+    """Live payment facts for the current cart. Saathi only offers cash on delivery."""
 
     cod_available: bool
     cod_id: str | None = None
