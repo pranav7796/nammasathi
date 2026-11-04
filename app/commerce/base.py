@@ -42,6 +42,7 @@ class RejectionKind(StrEnum):
     CART_EXPIRED = "cart_expired"
     PAYMENT = "payment"
     DUPLICATE = "duplicate"
+    NOT_PERMITTED = "not_permitted"
     OTHER = "other"
 
     @property
@@ -196,6 +197,7 @@ class CommerceRejected(CommerceError):
     ) -> None:
         super().__init__(message)
         self.kind = kind
+        self.provider_message = ""  # Swiggy's own reason; kept out of str() and logs
 
 
 def classify_rejection(message: str) -> RejectionKind | None:
@@ -209,6 +211,11 @@ def classify_rejection(message: str) -> RejectionKind | None:
         return None
     if "duplicate" in text:
         return RejectionKind.DUPLICATE
+    if any(
+        phrase in text
+        for phrase in ("not permitted", "not allowed", "not eligible", "not whitelisted")
+    ):
+        return RejectionKind.NOT_PERMITTED
     if "minimum order" in text or "min order" in text:
         return RejectionKind.MIN_ORDER
     if "out of stock" in text or "unavailable" in text or "sold out" in text:

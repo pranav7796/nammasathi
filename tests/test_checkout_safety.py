@@ -634,6 +634,23 @@ async def test_definitive_refusal_returns_to_a_fresh_readback(kind: RejectionKin
     assert runner.session.state is State.DONE
 
 
+async def test_permission_refusal_places_nothing_and_keeps_swiggys_reason() -> None:
+    refusal = CommerceRejected("refused", kind=RejectionKind.NOT_PERMITTED)
+    refusal.provider_message = "Order not permitted for this account"
+    journal = InMemoryOrderJournal()
+    shop = Shop(checkout_script=[refusal])
+    runner = await at_readback(shop, journal=journal)
+
+    effects = await runner.dispatch_text("yes")
+
+    assert "order_rejected" in says(effects)
+    assert runner.session.order_ids == ()
+    assert shop.checkout_calls == 1
+    [attempt] = journal.attempts()
+    assert attempt.status is AttemptStatus.NOT_PLACED
+    assert "Order not permitted for this account" in attempt.note
+
+
 @pytest.mark.parametrize("kind", [RejectionKind.DUPLICATE, RejectionKind.OTHER])
 async def test_unclear_refusal_is_treated_as_unknown(kind: RejectionKind) -> None:
     shop = Shop(checkout_script=[CommerceRejected("refused", kind=kind)])

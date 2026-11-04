@@ -130,7 +130,9 @@ class SwiggyDiagnosticError(CommerceError):
 class SwiggyRejected(SwiggyDiagnosticError, CommerceRejected):
     """Swiggy answered and refused. The provider text is classified, never exposed by str()."""
 
-    def __init__(self, *, operation: str, stage: str, kind: RejectionKind) -> None:
+    def __init__(
+        self, *, operation: str, stage: str, kind: RejectionKind, provider_message: str = ""
+    ) -> None:
         SwiggyDiagnosticError.__init__(
             self,
             operation=operation,
@@ -139,6 +141,7 @@ class SwiggyRejected(SwiggyDiagnosticError, CommerceRejected):
             detail=f"Swiggy refused the request ({kind.value})",
         )
         self.kind = kind
+        self.provider_message = provider_message
 
 
 def diagnostic_from_exception(
@@ -391,7 +394,6 @@ class SwiggyInstamart(CommerceAdapter):
         )
         self._storage = storage
         self._available_payment_methods: set[str] = set()
-        self._cod_id: str | None = None
         self._last_cart_address_id: str | None = None
         self._queue: asyncio.Queue[_ToolRequest] | None = None
         self._worker: asyncio.Task[None] | None = None
@@ -664,7 +666,6 @@ class SwiggyInstamart(CommerceAdapter):
         )
         available = cod.get("available") is True
         cod_id = _optional_str(cod.get("id"))
-        self._cod_id = cod_id
         if available:
             self._available_payment_methods = {*self._available_payment_methods, cod_id or "COD"}
         else:
@@ -689,12 +690,12 @@ class SwiggyInstamart(CommerceAdapter):
             raise CommerceNotAttempted(
                 "Refresh the cart for the selected delivery address before checkout"
             )
-        selected_method = self._cod_id if self._cod_id in {"COD", "Cash"} else "Cash"
         if not _payment_method_is_available("Cash", self._available_payment_methods):
             raise CommerceNotAttempted(
                 "The selected payment method is not available for the current cart"
             )
-        arguments: dict[str, object] = {"addressId": address_id, "paymentMethod": selected_method}
+        # The live checkout description says to pass paymentMethod="Cash" for cash on delivery.
+        arguments: dict[str, object] = {"addressId": address_id, "paymentMethod": "Cash"}
         data, message = await self._call_with_message("checkout", arguments)
         return _order_result(data, message)
 
@@ -747,7 +748,7 @@ def _raise_provider_failure(name: str, stage: str, text: str) -> None:
     kind = classify_rejection(text) if text else None
     log_event("provider_failure", tool=name, kind=kind.value if kind else "unclassified")
     if kind is not None:
-        raise SwiggyRejected(operation=name, stage=stage, kind=kind)
+        raise SwiggyRejected(operation=name, stage=stage, kind=kind, provider_message=text)
     cause = CommerceError("Swiggy MCP tool returned an error result")
     raise diagnostic_from_exception(name, stage, cause) from cause
 

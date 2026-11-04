@@ -91,6 +91,7 @@ class CheckoutCoordinator:
         self.policy = policy or CheckoutPolicy()
         self._sleep = sleep
         self._attempt: OrderAttempt | None = None
+        self._refusal = ""
 
     def _guard(self, session_total: Decimal) -> Callable[[list[OrderAttempt]], None]:
         def check(existing: list[OrderAttempt]) -> None:
@@ -147,6 +148,8 @@ class CheckoutCoordinator:
             return CheckoutAborted("preflight")
         except CommerceRejected as exc:
             log_event("checkout_rejected", kind=exc.kind.value)
+            # Keep Swiggy's own reason in the private journal: it is what a person needs to read.
+            self._refusal = f"{exc.kind.value}: {exc.provider_message[:200]}".rstrip(": ")
             return CheckoutFailed(exc.kind.value, terminal=exc.kind.is_definitive)
         except Exception as exc:
             # Timeouts, lost connections, 5xx, unreadable replies: the order may exist.
@@ -211,12 +214,17 @@ class CheckoutCoordinator:
             log_event("reconcile", outcome="found")
             return ReconcileResult(order_found=True, order_ids=ids, cart_hash=session.cart_hash)
         if absent and session.failure_terminal:
-            self._settle(AttemptStatus.NOT_PLACED, note="refused; no new order in history")
+            self._settle(
+                AttemptStatus.NOT_PLACED,
+                note=f"refused; no new order in history; {self._refusal}",
+            )
             log_event("reconcile", outcome="refused_absent")
             return ReconcileResult(
                 order_found=False, cart_hash=session.cart_hash, confirmed_absent=True
             )
-        self._settle(AttemptStatus.UNKNOWN, note="outcome could not be proven")
+        self._settle(
+            AttemptStatus.UNKNOWN, note=f"outcome could not be proven; {self._refusal}".rstrip("; ")
+        )
         log_event("reconcile", outcome="unknown")
         return ReconcileResult(order_found=False, cart_hash=session.cart_hash)
 

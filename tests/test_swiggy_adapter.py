@@ -1131,7 +1131,7 @@ def test_checkout_works_when_live_cart_omits_payment_methods(
     assert str(result.total_inr) == "86.5"
     assert calls[-1] == {
         "name": "checkout",
-        "arguments": {"addressId": "addr-1", "paymentMethod": "COD"},
+        "arguments": {"addressId": "addr-1", "paymentMethod": "Cash"},
     }
 
 
@@ -1216,6 +1216,8 @@ def test_full_multi_store_result_is_success(monkeypatch: pytest.MonkeyPatch) -> 
         ("Cart expired", RejectionKind.CART_EXPIRED),
         ("Probable duplicate order", RejectionKind.DUPLICATE),
         ("Swiggy Money balance is too low", RejectionKind.PAYMENT),
+        ("This order is not permitted for this account", RejectionKind.NOT_PERMITTED),
+        ("user is not whitelisted", RejectionKind.NOT_PERMITTED),
         ("Something unexpected", RejectionKind.OTHER),
     ],
 )
@@ -1229,6 +1231,7 @@ def test_refusal_message_is_classified_but_never_exposed(
 
     assert error.value.kind is kind
     assert message not in str(error.value)
+    assert error.value.provider_message == message
 
 
 @pytest.mark.parametrize("message", ["Upstream timeout", "Internal error", "Bad gateway"])
