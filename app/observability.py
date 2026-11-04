@@ -26,6 +26,7 @@ _ALLOWED_FIELDS = frozenset(
         "mode",
         "op",
         "outcome",
+        "reason",
         "status",
         "to_state",
         "tool",

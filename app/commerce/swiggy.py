@@ -758,7 +758,13 @@ def _provider_error_text(payload: Mapping[str, object]) -> str:
 
 def _raise_provider_failure(name: str, stage: str, text: str) -> None:
     kind = classify_rejection(text) if text else None
-    log_event("provider_failure", tool=name, kind=kind.value if kind else "unclassified")
+    log_event(
+        "provider_failure",
+        tool=name,
+        kind=kind.value if kind else "unclassified",
+        # Swiggy's wording is what support needs; digits are masked in case it quotes an address.
+        reason=re.sub(r"\d", "#", text)[:160],
+    )
     if kind is not None:
         raise SwiggyRejected(operation=name, stage=stage, kind=kind, provider_message=text)
     cause = CommerceError("Swiggy MCP tool returned an error result")

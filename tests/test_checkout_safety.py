@@ -899,6 +899,31 @@ async def test_cancel_restores_the_cart_the_user_started_with() -> None:
     assert [line.name for line in runner.session.cart] == ["Dosa Rice"]
 
 
+async def test_brief_refusal_when_opening_the_basket_is_retried_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seen live: get_cart refused as not serviceable, then fine moments later."""
+    monkeypatch.setattr("app.orchestrator.turn_runner.START_CART_RETRY_SECONDS", 0)
+    shop = Shop(items=[_existing()], cart_address="home")
+    real_get_cart = shop.get_cart
+    calls = {"n": 0}
+
+    async def refuses_once() -> Cart:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise CommerceRejected("refused", kind=RejectionKind.NOT_SERVICEABLE)
+        return await real_get_cart()
+
+    shop.get_cart = refuses_once  # type: ignore[method-assign]
+
+    runner = await TextTurnRunner.create(shop, Extractor(ADD_MILK), address_id="home")
+
+    assert calls["n"] == 2
+    assert shop.update_calls == 0
+    effects = await runner.dispatch(CallStarted(user_known=True, language="en-IN"))
+    assert "existing_cart" in says(effects), "the real basket is still protected"
+
+
 async def test_failed_cancel_never_claims_the_basket_was_cancelled() -> None:
     """Seen live: Ajji said "cancelled", then "could not reach the shop"."""
     shop = Shop()

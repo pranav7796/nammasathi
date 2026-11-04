@@ -22,7 +22,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.commerce.base import CommerceAdapter, CommerceAuthRequired, CommerceError
+from app.commerce.base import (
+    CommerceAdapter,
+    CommerceAuthRequired,
+    CommerceError,
+    CommerceRejected,
+)
 from app.commerce.runtime import checkout_policy, commerce_adapter, order_journal
 from app.commerce.swiggy import SwiggyInstamart
 from app.config import Settings, load_settings
@@ -212,6 +217,14 @@ def create_app(
             raise HTTPException(
                 status_code=503,
                 detail="Swiggy login has expired. Run `uv run python -m app.swiggy_auth`.",
+            ) from exc
+        except CommerceRejected as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Swiggy could not open your basket just now, and nothing was changed. "
+                    "Please try again in a minute, and check the Swiggy app if it continues."
+                ),
             ) from exc
         except CommerceError as exc:
             raise HTTPException(

@@ -13,7 +13,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.commerce.base import CartLine
+from app.commerce.base import Cart, CartLine, CommerceRejected, RejectionKind
 from app.commerce.mock import MockInstamart
 from app.commerce.order_journal import FileOrderJournal, new_attempt
 from app.config import Settings, load_settings
@@ -680,6 +680,25 @@ async def test_existing_cart_for_another_address_is_explained(
     assert response.status_code == 409
     assert "will not overwrite" in response.json()["detail"]
     assert len(shop._cart) == 1  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_refused_basket_read_is_explained_and_changes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("app.orchestrator.turn_runner.START_CART_RETRY_SECONDS", 0)
+    app, shop = _real_app(monkeypatch, _real_settings(tmp_path), [], FakeVoiceServices([]))
+
+    async def refused() -> Cart:
+        raise CommerceRejected("refused", kind=RejectionKind.NOT_SERVICEABLE)
+
+    monkeypatch.setattr(shop, "get_cart", refused)
+
+    async with _local_client(app) as client:
+        response = await client.post("/api/sessions", json={"language": "en-IN"})
+
+    assert response.status_code == 503
+    assert "nothing was changed" in response.json()["detail"]
+    assert shop.checkout_calls == 0
 
 
 async def test_choosing_an_option_by_tap_uses_the_same_rules() -> None:

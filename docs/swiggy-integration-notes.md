@@ -36,6 +36,7 @@ Docs: <https://mcp.swiggy.com/builders/docs/>. Key pages:
 | Bill | `Extra Offer Savings` is negative, `Delivery Partner Fee` can be `FREE`, and `Rain Fee` appeared later, moving the total from ₹508 to ₹544 within minutes. | Fees and savings read from the bill lines; preflight before checkout catches changes. |
 | Price | At quantity 2, `discountedFinalPrice` is per unit. | Confirms the default. |
 | Pack label | `itemVariant` can say `1 kg` where the app shows `500 g x 2`. | Same amount; read back as Swiggy's API reports it. |
+| Refusal | `get_cart` was refused as not serviceable twice around 00:37 IST on 5 November, then succeeded on 10 of 10 reads from 00:38 IST. Swiggy's wording was not captured. Cause unknown. | Session start retries once; the reason is now logged with digits masked. |
 | Address | `selectedAddressDetails.flatNo` holds the flat number, separate from `address`. | Included in the readback. |
 
 ## Not yet observed

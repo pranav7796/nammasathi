@@ -4,7 +4,9 @@ import logging
 
 import pytest
 
+from app.commerce.base import CommerceRejected
 from app.commerce.mock import MockInstamart
+from app.commerce.swiggy import _raise_provider_failure  # pyright: ignore[reportPrivateUsage]
 from app.observability import log_event
 from app.orchestrator.state_machine import CallStarted
 from app.orchestrator.turn_runner import TextTurnRunner
@@ -33,3 +35,12 @@ async def test_runtime_events_hold_no_address_or_transcript(
 
     assert any("state_changed" in message for message in caplog.messages)
     assert not any("Jayanagar" in message for message in caplog.messages)
+
+
+def test_provider_reason_is_logged_with_digits_masked(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="ajji.events")
+    with pytest.raises(CommerceRejected):
+        _raise_provider_failure("get_cart", "stage", "Not serviceable at flat 1004")
+
+    assert any("Not serviceable at flat ####" in message for message in caplog.messages)
+    assert not any("1004" in message for message in caplog.messages)

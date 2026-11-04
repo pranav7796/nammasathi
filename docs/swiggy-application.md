@@ -27,9 +27,9 @@ Flow: the user speaks a request, Ajji finds matching products, and it asks a que
 
 Safety: the LLM only interprets language and has no access to Swiggy tools. Deterministic code controls the cart and checkout. Approval is tied to the exact cart that was read back, existing carts are preserved, and checkout is never retried automatically. Unclear outcomes are checked against order history and block further ordering until a person resolves them.
 
-Current status: [UPDATE AFTER THE TEST: what was tried on the production server from localhost on my own account, on what date, and the exact result.]
+Current status: on 4 November 2026 I tested it from localhost against the production Instamart server on my own account. Search, cart updates, and the spoken readback worked, and the total matched the Swiggy app. Checkout was disabled in the app, so no order has been placed. The test exposed a bug in cancelling a basket, which I fixed afterwards but have not yet re-tested live.
 
-Use and access: it runs on my machine for my own Swiggy account. There are no other users yet. Please confirm what approval this needs, and whether staging is required first. I would also like to know what agenticPaymentEligible=false means for a COD order.
+Use and access: it runs on my machine for my own Swiggy account. There are no other users yet. I would like to place one small cash-on-delivery test order. Please confirm whether I may do that, what approval this needs, and whether staging is required first. I would also like to know what agenticPaymentEligible=false means for a COD order.
 ```
 
 ### Tech stack and architecture

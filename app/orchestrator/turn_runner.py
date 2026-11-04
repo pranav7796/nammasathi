@@ -62,6 +62,7 @@ from app.orchestrator.state_machine import (
 )
 
 INTENT_TURN_TIMEOUT_SECONDS = 45.0
+START_CART_RETRY_SECONDS = 2.0
 
 
 class IntentExtractor(Protocol):
@@ -132,7 +133,13 @@ class TextTurnRunner:
         except JournalError:
             unresolved = True  # an unreadable journal cannot prove the last attempt was settled
         # Read before any write: the account may already hold a cart we must not overwrite.
-        cart = await adapter.get_cart()
+        try:
+            cart = await adapter.get_cart()
+        except CommerceRejected:
+            # Seen live: a brief "not serviceable" that clears within a minute. Reads are safe
+            # to repeat, and nothing has been changed yet.
+            await asyncio.sleep(START_CART_RETRY_SECONDS)
+            cart = await adapter.get_cart()
         if cart.items and cart.address_id and not same_address_id(cart.address_id, address.id):
             raise ExistingCartConflict("The current cart belongs to another delivery address")
         session = replace(
