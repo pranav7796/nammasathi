@@ -431,6 +431,7 @@ def _session_payload(
         "cart": cart,
         "total_inr": _money_json(session.total_inr),
         "fees_inr": _money_json(session.fees_inr),
+        "savings_inr": _money_json(session.savings_inr),
         "store_count": session.store_count,
         "issues": list(session.issues),
         "address_label": session.address_label,

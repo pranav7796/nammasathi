@@ -223,6 +223,7 @@ class CartSnapshotReceived:
     delivery_address: str = ""
     issues: tuple[str, ...] = ()
     fees_inr: Money = 0
+    savings_inr: Money = 0
     store_count: int = 1
     payment_method: str = "COD"
     notice: str = ""
@@ -297,6 +298,7 @@ class Session:
     cart_hash: str = ""
     total_inr: Money = 0
     fees_inr: Money = 0
+    savings_inr: Money = 0
     store_count: int = 1
     payment_method: str = "COD"
     address_label: str = ""
@@ -378,6 +380,7 @@ def readback_say(session: Session) -> Say:
             "lines": lines,
             "total": format_money(total),
             "fees": format_money(session.fees_inr),
+            "savings": format_money(session.savings_inr),
             "stores": str(session.store_count),
             "payment": session.payment_method,
             "address_label": session.address_label,
@@ -461,11 +464,10 @@ def _clear_unsubmitted_cart(session: Session) -> Session:
 
 
 def _cancel(session: Session) -> tuple[Session, list[Effect]]:
-    had_cart = bool(session.cart)
-    effects: list[Effect] = [Say("order_cancelled")]
-    if had_cart:
-        effects.append(CallCommerce("restore_cart"))
-    return _clear_unsubmitted_cart(session), effects
+    # "Cancelled" is only said once the real cart is known to be restored.
+    if session.cart:
+        return _clear_unsubmitted_cart(session), [CallCommerce("restore_cart")]
+    return _clear_unsubmitted_cart(session), [Say("order_cancelled")]
 
 
 def _clarification_say(clarification: Clarification) -> Say:
@@ -888,6 +890,7 @@ def _on_cart_snapshot(
         cart_hash=next_hash,
         total_inr=event.total_inr,
         fees_inr=event.fees_inr,
+        savings_inr=event.savings_inr,
         store_count=event.store_count,
         payment_method=event.payment_method,
         issues=event.issues,
@@ -902,11 +905,11 @@ def _on_cart_snapshot(
         next_session = _unbind(next_session)
     if waiting:
         return next_session, []
-    if not event.cart:
-        return next_session, [Say("ask_what_to_add")]
     effects: list[Effect] = []
     if event.notice:
         effects.append(Say(event.notice))
+    if not event.cart:
+        return next_session, [*effects, Say("ask_what_to_add")]
     if placing and changed:
         effects.append(Say("cart_changed"))
     bound, say = _with_readback(next_session)

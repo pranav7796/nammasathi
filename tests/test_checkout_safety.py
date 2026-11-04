@@ -899,6 +899,49 @@ async def test_cancel_restores_the_cart_the_user_started_with() -> None:
     assert [line.name for line in runner.session.cart] == ["Dosa Rice"]
 
 
+async def test_failed_cancel_never_claims_the_basket_was_cancelled() -> None:
+    """Seen live: Ajji said "cancelled", then "could not reach the shop"."""
+    shop = Shop()
+    runner = await at_readback(shop)
+    runner.extractor = Extractor(("cancel", []))
+    shop.update_error = CommerceError("refused")
+
+    effects = await runner.dispatch_text("cancel that")
+
+    assert "order_cancelled" not in says(effects)
+    assert "commerce_error" in says(effects)
+    assert "readback" in says(effects), "the user hears what is really still in the basket"
+    assert [item.name for item in shop.items] == ["Amul Milk"]
+    assert runner.session.cart != ()
+
+
+async def test_successful_cancel_says_so_after_the_cart_is_empty() -> None:
+    shop = Shop()
+    runner = await at_readback(shop)
+    runner.extractor = Extractor(("cancel", []))
+
+    effects = await runner.dispatch_text("cancel that")
+
+    assert says(effects) == ["order_cancelled", "ask_what_to_add"]
+    assert shop.items == []
+    assert runner.session.state is State.COLLECTING
+
+
+async def test_cancel_does_not_overwrite_a_change_made_in_the_app() -> None:
+    shop = Shop()
+    runner = await at_readback(shop)
+    runner.extractor = Extractor(("cancel", []))
+    shop.items.append(_existing())
+    writes = shop.update_calls
+
+    effects = await runner.dispatch_text("cancel that")
+
+    assert shop.update_calls == writes
+    assert "order_cancelled" not in says(effects)
+    assert "cart_changed" in says(effects)
+    assert any(item.name == "Dosa Rice" for item in shop.items)
+
+
 async def test_edit_made_in_the_app_between_turns_is_not_overwritten() -> None:
     shop = Shop()
     runner = await at_readback(shop)

@@ -144,7 +144,11 @@ function renderCart(data) {
       item.textContent = `${line.quantity} × ${line.name}, ${line.pack_size} — ₹${line.unit_price_inr} each, ₹${line.line_total_inr} total`;
       confirmationItems.append(item);
     }
-    confirmationTotal.textContent = `₹${data.total_inr}`;
+    const bill = [
+      data.savings_inr ? `saves ₹${data.savings_inr}` : "",
+      data.fees_inr ? `fees ₹${data.fees_inr}` : "",
+    ].filter(Boolean).join(", ");
+    confirmationTotal.textContent = bill ? `₹${data.total_inr} (${bill})` : `₹${data.total_inr}`;
     confirmationAddress.textContent = data.delivery_address || data.address_label || "No delivery address is set";
     const payment = data.payment_method === "COD"
       ? "Cash on delivery"

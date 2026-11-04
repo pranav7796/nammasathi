@@ -173,6 +173,7 @@ def test_readback_say_carries_lines_total_payment_and_address() -> None:
         "lines": "2 x 500 ml Nandini Toned Milk",
         "total": "52",
         "fees": "0",
+        "savings": "0",
         "stores": "1",
         "payment": "COD",
         "address_label": "Home",

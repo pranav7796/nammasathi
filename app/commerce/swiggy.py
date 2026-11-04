@@ -78,8 +78,9 @@ ALLOWED_MCP_URLS = frozenset({SWIGGY_MCP_URL, SWIGGY_STAGING_MCP_URL})
 _ANY_URL = TypeAdapter(AnyUrl)
 OAUTH_REDIRECT_URI = "http://localhost"
 
-# The only tools this adapter may ever call. clear_cart, address mutation, coupons,
-# and UPI confirmation are deliberately absent.
+# The only tools this adapter may ever call. Address mutation, coupons, and UPI
+# confirmation are deliberately absent. clear_cart is only reachable through update_cart
+# with an empty list, so it needs the same cart-write switch.
 _READ_TOOLS = frozenset(
     {
         "get_addresses",
@@ -91,7 +92,7 @@ _READ_TOOLS = frozenset(
         "track_order",
     }
 )
-_WRITE_TOOLS = frozenset({"update_cart", "checkout"})
+_WRITE_TOOLS = frozenset({"update_cart", "clear_cart", "checkout"})
 _TOOL_TIMEOUT_SECONDS = 30.0
 _CHECKOUT_TIMEOUT_SECONDS = 60.0
 _SESSION_IDLE_SECONDS = 120.0
@@ -630,6 +631,8 @@ class SwiggyInstamart(CommerceAdapter):
     async def update_cart(self, address_id: str, items: list[CartLine]) -> Cart:
         if not self.allow_cart_writes:
             raise CommerceWriteDisabled("Changing the real Swiggy cart is disabled")
+        if not items:
+            return await self._clear_cart()
         data = await self._call(
             "update_cart",
             {
@@ -643,6 +646,15 @@ class SwiggyInstamart(CommerceAdapter):
         cart = _cart(data)
         self._remember_payment_methods(data)
         self._last_cart_address_id = cart.address_id or address_id
+        return cart
+
+    async def _clear_cart(self) -> Cart:
+        # Live: update_cart with an empty list fails during cancel; clear_cart is the
+        # documented way to empty a cart. Only the following read proves it worked.
+        await self._call("clear_cart", {})
+        cart = await self.get_cart()
+        if cart.items:
+            raise CommerceError("Swiggy cart was not empty after clear_cart")
         return cart
 
     async def get_cart(self) -> Cart:
@@ -961,6 +973,28 @@ def _unit_prices(
     return finals
 
 
+def _bill_adjustments(
+    breakdown: Mapping[str, object], item_total: Decimal, total: Decimal
+) -> tuple[Decimal, Decimal]:
+    """(fees, savings) from the bill's lines; live lines include "-₹49.95" and "FREE"."""
+    lines = _list(breakdown.get("lineItems"), "lineItems", allow_missing=True)
+    fees = savings = Decimal(0)
+    for line in lines:
+        if str(line.get("label") or "").casefold() == "item total":
+            continue
+        raw = str(line.get("value") or "")
+        amount = _optional_money(raw)
+        if amount is None:
+            continue
+        if raw.strip().startswith("-"):
+            savings += amount
+        else:
+            fees += amount
+    if not lines:
+        fees = max(total - item_total, Decimal(0))
+    return fees, savings
+
+
 def _cart_issues(
     data: Mapping[str, object], raw_items: list[Mapping[str, object]]
 ) -> tuple[list[CartIssue], list[str]]:
@@ -1036,7 +1070,10 @@ def _cart(data: Mapping[str, object]) -> Cart:
         )
         if name in payment_names
     ]
+    fees, savings = _bill_adjustments(breakdown, item_total, total)
+    # The flat number is what tells a delivery partner which home this is.
     address_parts = [
+        _optional_str(address_details.get("flatNo")),
         _optional_str(address_details.get("address")),
         _optional_str(address_details.get("area")),
     ]
@@ -1054,7 +1091,8 @@ def _cart(data: Mapping[str, object]) -> Cart:
         delivery_address=address_text or None,
         items=items,
         item_total_inr=item_total,
-        delivery_fee_inr=max(total - item_total, Decimal(0)),
+        delivery_fee_inr=fees,
+        savings_inr=savings,
         grand_total_inr=total,
         payment_methods=payments,
         errors=errors,

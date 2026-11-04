@@ -18,7 +18,14 @@ MILK = CartEntry("m", "sku-m", "Amul Milk", "500 ml x 4", 1, Decimal("118.50"))
 def _readback() -> Say:
     return Say(
         "readback",
-        data={"total": "156", "fees": "14", "stores": "2", "payment": "COD", "address": "1 Road"},
+        data={
+            "total": "156",
+            "fees": "14",
+            "savings": "49.95",
+            "stores": "2",
+            "payment": "COD",
+            "address": "1 Road",
+        },
         lines=(RICE, MILK),
     )
 

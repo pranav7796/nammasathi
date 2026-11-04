@@ -71,10 +71,11 @@ _PHRASES: dict[str, dict[str, str]] = {
         "readback_line": "{quantity} packs of {pack} {name} at ₹{price} each",
         "readback_line_single": "{pack} {name} at ₹{price}",
         "readback": (
-            "Your basket has {lines}. {fees}The total is ₹{total}. {stores}"
+            "Your basket has {lines}. {savings}{fees}The total is ₹{total}. {stores}"
             "Payment is cash on delivery. Delivery address: {address}. Shall I place this order?"
         ),
-        "fees": "This includes ₹{fees} in fees. ",
+        "fees": "Fees are ₹{fees}. ",
+        "savings": "You save ₹{savings}. ",
         "stores": "These items come from {stores} stores. ",
         "cart_blocked": "Your basket has {lines}. The total is ₹{total}. {issue}",
         "issue_min_order": "This is below the minimum order amount. What would you like to add?",
@@ -147,10 +148,11 @@ _PHRASES: dict[str, dict[str, str]] = {
         "readback_line": "{pack} {name} के {quantity} पैकेट, ₹{price} प्रति पैकेट",
         "readback_line_single": "{pack} {name}, ₹{price}",
         "readback": (
-            "आपकी टोकरी में {lines} हैं। {fees}कुल ₹{total} हैं। {stores}"
+            "आपकी टोकरी में {lines} हैं। {savings}{fees}कुल ₹{total} हैं। {stores}"
             "भुगतान सामान मिलने पर नकद है। पता: {address}। क्या मैं यह ऑर्डर कर दूँ?"
         ),
-        "fees": "इसमें ₹{fees} शुल्क शामिल है। ",
+        "fees": "शुल्क ₹{fees} है। ",
+        "savings": "आपकी ₹{savings} की बचत है। ",
         "stores": "यह सामान {stores} दुकानों से आएगा। ",
         "cart_blocked": "आपकी टोकरी में {lines} हैं। कुल ₹{total} हैं। {issue}",
         "issue_min_order": "यह न्यूनतम ऑर्डर रकम से कम है। आप और क्या जोड़ना चाहेंगे?",
@@ -218,10 +220,11 @@ _PHRASES: dict[str, dict[str, str]] = {
         "readback_line": "{pack} {name} {quantity} ಪ್ಯಾಕೆಟ್, ಒಂದಕ್ಕೆ ₹{price}",
         "readback_line_single": "{pack} {name}, ₹{price}",
         "readback": (
-            "ನಿಮ್ಮ ಬುಟ್ಟಿಯಲ್ಲಿ {lines} ಇವೆ. {fees}ಒಟ್ಟು ₹{total}. {stores}"
+            "ನಿಮ್ಮ ಬುಟ್ಟಿಯಲ್ಲಿ {lines} ಇವೆ. {savings}{fees}ಒಟ್ಟು ₹{total}. {stores}"
             "ಪಾವತಿ ಸಾಮಾನು ಬಂದಾಗ ನಗದು. ವಿಳಾಸ: {address}. ಈ ಆರ್ಡರ್ ಮಾಡಲೇ?"
         ),
-        "fees": "ಇದರಲ್ಲಿ ₹{fees} ಶುಲ್ಕ ಸೇರಿದೆ. ",
+        "fees": "ಶುಲ್ಕ ₹{fees}. ",
+        "savings": "ನಿಮಗೆ ₹{savings} ಉಳಿತಾಯ. ",
         "stores": "ಈ ಸಾಮಾನುಗಳು {stores} ಅಂಗಡಿಗಳಿಂದ ಬರುತ್ತವೆ. ",
         "cart_blocked": "ನಿಮ್ಮ ಬುಟ್ಟಿಯಲ್ಲಿ {lines} ಇವೆ. ಒಟ್ಟು ₹{total}. {issue}",
         "issue_min_order": "ಇದು ಕನಿಷ್ಠ ಆರ್ಡರ್ ಮೊತ್ತಕ್ಕಿಂತ ಕಡಿಮೆ ಇದೆ. ಇನ್ನೇನು ಸೇರಿಸಬೇಕು?",
@@ -265,12 +268,14 @@ def _render_lines(say: Say, phrases: dict[str, str]) -> str:
 
 def _render_readback(say: Say, phrases: dict[str, str]) -> str:
     fees = say.data.get("fees", "0")
+    savings = say.data.get("savings", "0")
     stores = say.data.get("stores", "1")
     return phrases["readback"].format(
         lines=_render_lines(say, phrases) or say.data.get("lines", ""),
         total=say.data.get("total", ""),
         address=say.data.get("address", say.data.get("address_label", "")),
         fees=phrases["fees"].format(fees=fees) if fees not in {"", "0"} else "",
+        savings=phrases["savings"].format(savings=savings) if savings not in {"", "0"} else "",
         stores=phrases["stores"].format(stores=stores) if stores not in {"", "1"} else "",
     )
 

@@ -893,6 +893,74 @@ def test_empty_cart_shapes_read_as_empty(
     assert cart.grand_total_inr == 0
 
 
+def test_live_bill_separates_savings_fees_and_free_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Observed live: fees and a discount together made the total less than the items."""
+    payload = _live_cart_payload()
+    data = cast(dict[str, Any], payload["data"])
+    data["billBreakdown"] = {
+        "lineItems": [
+            {"label": "Item Total", "value": "₹60.00"},
+            {"label": "Extra Offer Savings", "value": "-₹9.95"},
+            {"label": "Handling Fee", "value": "₹5.00"},
+            {"label": "Delivery Partner Fee", "value": "FREE"},
+        ],
+        "toPay": {"label": "To Pay", "value": "₹55"},
+    }
+    _patch_mcp(monkeypatch, FakeMcpResult(payload))
+
+    cart = asyncio.run(_adapter().get_cart())
+
+    assert cart.grand_total_inr == 55
+    assert cart.delivery_fee_inr == 5
+    assert str(cart.savings_inr) == "9.95"
+
+
+def test_flat_number_is_part_of_the_spoken_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _live_cart_payload()
+    cast(dict[str, Any], payload["data"])["selectedAddressDetails"]["flatNo"] = "1004"
+    _patch_mcp(monkeypatch, FakeMcpResult(payload))
+
+    assert asyncio.run(_adapter().get_cart()).delivery_address == (
+        "1004, 12 Example Road, Indiranagar"
+    )
+
+
+def test_emptying_the_cart_uses_clear_cart_and_proves_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    empty: dict[str, object] = {"success": True, "data": {"cartAbsent": True}}
+    calls = _scripted(
+        monkeypatch,
+        clear_cart=FakeMcpResult({"success": True, "data": {"verified": True}}),
+        get_cart=FakeMcpResult(empty),
+    )
+
+    cart = asyncio.run(_adapter().update_cart("addr-1", []))
+
+    assert cart.items == []
+    assert [call["name"] for call in calls] == ["clear_cart", "get_cart"]
+
+
+def test_cart_still_full_after_clear_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _scripted(
+        monkeypatch,
+        clear_cart=FakeMcpResult(
+            {"success": True, "data": {"verified": None, "acknowledged": True}}
+        ),
+        get_cart=FakeMcpResult(_live_cart_payload()),
+    )
+
+    with pytest.raises(CommerceError, match="not empty"):
+        asyncio.run(_adapter().update_cart("addr-1", []))
+
+
+def test_clearing_needs_the_cart_write_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_mcp(monkeypatch, FakeMcpResult({}))
+
+    with pytest.raises(CommerceWriteDisabled):
+        asyncio.run(_adapter(cart_writes=False).update_cart("addr-1", []))
+
+    assert calls == []
+
+
 def test_cart_writes_are_off_unless_explicitly_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _patch_mcp(monkeypatch, FakeMcpResult(_cart_payload()))
     adapter = SwiggyInstamart(
@@ -909,7 +977,9 @@ def test_cart_writes_are_off_unless_explicitly_enabled(monkeypatch: pytest.Monke
     assert calls == [], "nothing was sent"
 
 
-@pytest.mark.parametrize("tool", ["clear_cart", "create_address", "confirm_order", "apply_coupon"])
+@pytest.mark.parametrize(
+    "tool", ["delete_address", "create_address", "confirm_order", "apply_coupon"]
+)
 def test_tools_outside_the_allowlist_cannot_be_called(
     monkeypatch: pytest.MonkeyPatch, tool: str
 ) -> None:

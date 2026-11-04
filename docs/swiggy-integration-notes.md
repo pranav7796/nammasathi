@@ -27,17 +27,26 @@ Docs: <https://mcp.swiggy.com/builders/docs/>. Key pages:
 | Cart coordinates | `selectedAddressDetails` includes `lat` and `lng`, undocumented, and `track_order` needs them. | Used as the second verification source. |
 | Search | Native script works (`ಹಾಲು`, `दूध`), `haalu` works, `akki` returned noise. 20 products per page. | LLM `search_term`, a vocabulary table, and a name filter. |
 
+## Observed in the live rehearsal (4 November 2026)
+
+| Topic | Observation | Consequence in code |
+|---|---|---|
+| Writes | `update_cart` worked from localhost with the full address ID, and the cart's address matched. Readback total matched the Swiggy app. | Cart writes are proven; ordering is not. |
+| Emptying | Cancelling back to an empty cart failed when it used `update_cart` with no items. The exact response was not captured. | Emptying uses `clear_cart`, then `get_cart` to prove it. Not yet re-run live. |
+| Bill | `Extra Offer Savings` is negative, `Delivery Partner Fee` can be `FREE`, and `Rain Fee` appeared later, moving the total from ₹508 to ₹544 within minutes. | Fees and savings read from the bill lines; preflight before checkout catches changes. |
+| Price | At quantity 2, `discountedFinalPrice` is per unit. | Confirms the default. |
+| Pack label | `itemVariant` can say `1 kg` where the app shows `500 g x 2`. | Same amount; read back as Swiggy's API reports it. |
+| Address | `selectedAddressDetails.flatNo` holds the flat number, separate from `address`. | Included in the readback. |
+
 ## Not yet observed
 
-These need a live write or a populated history, which has not been authorized.
+These need a live checkout or a populated history, which has not been authorized.
 The code fails closed on each.
 
 - A `get_orders` response containing an order (history was empty).
-- A real `update_cart` or `checkout` response, including `selectedAddressDetails`
-  after a write and whether `removedOutOfStockItems` or `reducedQuantityItems` appear.
+- A real `checkout` response, and whether `removedOutOfStockItems` or
+  `reducedQuantityItems` appear after `update_cart`.
 - An empty cart's shape. Handled for both `cartAbsent` and an empty `items`.
-- Whether `discountedFinalPrice` is per unit or per line at quantity above one.
-  All observed lines had quantity 1. The adapter checks it against `Item Total`.
 - The exact staging path. The docs say `mcp-staging.swiggy.com/{server}`, and
   `/im` is assumed from the production path. Confirm it with Swiggy.
 

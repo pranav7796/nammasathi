@@ -322,8 +322,7 @@ class TextTurnRunner:
         if effect.op == "update_cart":
             return await self._write_cart()
         if effect.op == "restore_cart":
-            cart = await self.adapter.update_cart(self.address_id, self._baseline_lines)
-            return await self._snapshot(cart)
+            return await self._restore_cart()
         if effect.op == "get_cart":
             return await self._snapshot(await self.adapter.get_cart())
         if effect.op == "get_orders":
@@ -388,6 +387,15 @@ class TextTurnRunner:
             ),
         )
 
+    async def _restore_cart(self) -> CartSnapshotReceived:
+        """Cancel: return to the starting cart, unless it was changed elsewhere meanwhile."""
+        if self._synced_lines is not None:
+            current = await self.adapter.get_cart()
+            if _server_lines(current) != self._synced_lines:
+                return replace(await self._snapshot(current), notice="cart_changed")
+        cart = await self.adapter.update_cart(self.address_id, self._baseline_lines)
+        return replace(await self._snapshot(cart), notice="order_cancelled")
+
     async def _write_cart(self) -> CartSnapshotReceived:
         """Read, compare, then write: the cart is shared with the user's Swiggy app."""
         if self._synced_lines is not None:
@@ -441,6 +449,7 @@ class TextTurnRunner:
             delivery_address=cart.delivery_address or "",
             issues=tuple(issues),
             fees_inr=cart.delivery_fee_inr,
+            savings_inr=cart.savings_inr,
             store_count=cart.store_count,
         )
 

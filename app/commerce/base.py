@@ -122,6 +122,7 @@ class Cart(BaseModel):
     items: list[CartItem]
     item_total_inr: Decimal
     delivery_fee_inr: Decimal  # every charge beyond the items: delivery, handling, other fees
+    savings_inr: Decimal = Decimal(0)  # discounts shown on the bill
     grand_total_inr: Decimal
     payment_methods: list[PaymentMethod]
     errors: list[str] = Field(default_factory=lambda: list[str]())  # e.g. "Minimum order not met"

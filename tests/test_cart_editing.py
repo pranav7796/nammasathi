@@ -83,9 +83,8 @@ def test_cancel_clears_unsubmitted_cart_and_invalidates_confirmation() -> None:
     assert updated.cart_hash == ""
     assert updated.confirmed_version is None
     assert updated.cart_version == 4
-    assert any(
-        isinstance(effect, Say) and effect.template == "order_cancelled" for effect in effects
-    )
+    assert any(isinstance(e, CallCommerce) and e.op == "restore_cart" for e in effects)
+    assert not any(isinstance(e, Say) for e in effects), "not cancelled until the cart is restored"
 
 
 def test_completed_order_is_immutable_to_later_edit() -> None:
