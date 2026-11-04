@@ -1,118 +1,103 @@
-# Ajji Mart
+# Namma Saathi
 
-A voice-first grocery assistant that helps elderly users order from Swiggy Instamart
-in Kannada, Hindi, or English.
+**Your personal AI for everyday life.** Tell Namma Saathi what you need, by voice, in Kannada,
+Hindi, or English, and it helps get it done.
 
-Prisma STT → LLM intent extraction → deterministic state machine → commerce adapter →
-Timbre TTS.
+Today it can do three things through one conversation: order groceries from Instamart, order a
+meal from Swiggy Food, and reserve a table on Swiggy Dineout.
 
-The LLM only understands language. It has no tools and cannot touch the cart or place
-an order. Deterministic code owns every decision.
+The LLM only understands language. It has no tools and can't touch a cart or place an order.
+Deterministic code owns every decision. Namma Saathi grew out of Ajji Mart, a grocery assistant.
 
 ## Status
 
-The full journey works by voice in all three languages against the mock shop:
-request, product choice, cart, readback, spoken confirmation, order, verification,
-spoken result. Read-only access to the real Swiggy account has been verified.
+**No real order or booking has been placed.** All three journeys work on built-in mock services.
 
-**No real order has been placed.** Writing to the real cart and real checkout have
-never been exercised live. Both are off by default, and the procedure is in
-[docs/first-real-order.md](docs/first-real-order.md).
+| | Mock journey | Live reads | Live cart change | Live order or booking |
+|---|---|---|---|---|
+| Instamart | Works | Verified | Worked once in a rehearsal | Never run |
+| Swiggy Food | Works | Search and order history verified | Never run | Never run |
+| Swiggy Dineout | Works | Search and slots verified | Not applicable | Never run |
 
-## Setup
-
-```bash
-cp .env.example .env
-uv sync
-uv run pytest
-```
+Swiggy has not confirmed that a personal app may place real orders. See
+[docs/first-real-order.md](docs/first-real-order.md) and
+[docs/swiggy-application.md](docs/swiggy-application.md).
 
 ## Run it
 
 ```bash
-uv run uvicorn app.web:app --reload     # mock mode only; never --reload with a real account
+cp .env.example .env     # add GNANI_API_KEY and GEMINI_API_KEY
+uv sync
+uv run uvicorn app.web:app
 ```
 
-Open <http://localhost:8000>. Choose a language and address, press **Tap to speak**, and
-finish with **Finish speaking**. Needs `GNANI_API_KEY` and `GEMINI_API_KEY`.
-
-Without a browser: `uv run python -m app.text_demo` (typed), or
-`uv run python -m app.voice_demo --language hi-IN request.wav` (audio files). Both use
-the mock shop.
+Open <http://localhost:8000>. See [docs/demo-script.md](docs/demo-script.md) for what to say.
+Without a browser, `uv run python -m app.text_demo` and `app.voice_demo` run groceries on the mock.
 
 ## Configuration
 
-Everything real is off unless switched on, and each switch requires the one before it.
+Everything real is off unless switched on.
 
 | Setting | Default | Effect |
 |---|---|---|
 | `COMMERCE_BACKEND` | `mock` | `mock` never constructs a Swiggy client |
 | `SWIGGY_LIVE_ACCESS` | `false` | Read your real account |
-| `ALLOW_SWIGGY_CART_WRITES` | `false` | Change your real cart |
+| `ALLOW_SWIGGY_CART_WRITES` | `false` | Change your real Instamart and Food carts |
 | `ALLOW_REAL_CHECKOUT` | `false` | Place real orders; needs the above and `MAX_REAL_ORDER_INR` |
+| `ALLOW_REAL_BOOKING` | `false` | Book real free tables |
 | `MAX_REAL_ORDER_INR` | none | Refuse any order above this total |
-| `REAL_ORDER_LIMIT` | `1` | Orders the journal may record before refusing more |
-| `ORDER_JOURNAL_PATH` | `var/order_attempts.jsonl` | Durable checkout attempt record |
+| `REAL_ORDER_LIMIT` | `1` | Real orders and bookings allowed before refusing more |
+| `ORDER_JOURNAL_PATH` | `var/order_attempts.jsonl` | Durable record of every attempt |
 | `GNANI_TTS_VOICE` | per language | Saanvi, Nalini, or Kaveri unless overridden |
 
-See `.env.example` for the LLM and speech settings. Gemini is primary, with Groq and
-OpenRouter as fallbacks. OpenRouter's free model may log requests, so it is disabled
-when a real account is configured.
+Gemini is the primary LLM, with Groq and then OpenRouter as fallbacks. OpenRouter's free model may
+log requests, so it is disabled when a real account is configured.
 
 ## Tools
 
 ```bash
-uv run python -m app.swiggy_auth        # sign in to Swiggy (OAuth + PKCE; token in OS keyring)
-uv run python -m app.swiggy_preflight   # read-only readiness report; prints no personal data
-uv run python -m app.order_admin status # checkout attempts in the journal
+uv run python -m app.swiggy_auth        # sign in to Swiggy; the token stays in the OS keyring
+uv run python -m app.swiggy_preflight   # read-only readiness report for Instamart
+uv run python -m app.order_admin status # every attempt in the journal, and how to settle one
 ```
 
-## How an order stays safe
+## How real actions stay safe
 
-- **Nothing incompatible is chosen silently.** A product is chosen without asking only
-  if exactly one in-stock variant, from a matching product, makes exactly the requested
-  amount. Otherwise up to three options are spoken and shown.
-- **Questions keep your place.** Resolved items and the rest of the list wait while one
-  question is answered, and the cart is written once.
-- **Approval is bound to what you heard.** A yes covers one exact readback: items, prices,
-  total, address, and payment. Any change needs a new readback. The LLM's opinion never
-  counts as a yes.
-- **Your existing cart is protected.** It is read first and kept, and an edit made in the
-  Swiggy app between turns is never overwritten. Cancel restores what you started with.
-- **Checkout cannot run twice by accident.** Each attempt is written to disk before the
-  call. An unclear result is checked against order history by looking for a new order ID.
-  What cannot be proven becomes `ORDER_UNKNOWN`, which blocks checkout across sessions and
-  restarts until a person settles it.
-- **Payment is verified.** Cash on delivery must be reported available for the current cart
-  before you are asked to confirm.
-- **The result is verified and worded truthfully.** Orders are checked in order history or
-  tracking, and a real order is never called a demo, nor a demo real.
+- **Nothing incompatible is chosen silently.** A product is chosen without asking only if exactly
+  one in-stock option makes exactly what was asked. Otherwise up to three are read out.
+- **Approval is bound to what you heard.** A yes covers one exact readback, for the current task
+  only. Any change needs a new readback, and the LLM's opinion never counts as a yes.
+- **Your existing carts are protected.** They are read first and kept, and edits made in the Swiggy
+  app are not overwritten. A Food cart never silently switches restaurant.
+- **Nothing runs twice by accident.** Every attempt is saved before the call. An unclear result is
+  checked against order history. Anything unproven blocks all real actions, across tasks and
+  restarts, until a person settles it.
+- **Results are verified and worded truthfully.** A real order is never called a demo, nor a demo
+  real, and an unverified order is never called verified.
 
-See [DESIGN.md](DESIGN.md) for the design, [AGENTS.md](AGENTS.md) for rules for coding
-agents, and [docs/swiggy-integration-notes.md](docs/swiggy-integration-notes.md) for
-verified Swiggy behaviour.
+See [DESIGN.md](DESIGN.md) §16 for the architecture and
+[docs/swiggy-integration-notes.md](docs/swiggy-integration-notes.md) for verified Swiggy behaviour.
 
 ## Checks
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run pyright
-uv run pytest
-node --test tests/frontend/ajji-mart.test.cjs
+uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest
+node --test tests/frontend/namma-saathi.test.cjs
 ```
 
-Tests cannot reach the network or the OS credential store: `tests/conftest.py` makes any
-attempt fail.
+Tests can't reach the network or the OS credential store: `tests/conftest.py` makes any attempt fail.
 
 ## Known limitations
 
-- Real `update_cart`, `checkout`, and a populated `get_orders` have never been exercised
-  live, because they need real writes. See the notes file for each unobserved detail.
-- Kannada and Hindi phrases need review by native speakers, ideally with elderly users.
-- Tested with synthesized speech through the API, not yet with a person at a microphone.
-- Cash on delivery only. Sessions are in memory, so a restart loses the conversation but
-  not the order journal. One user, one process, on this machine.
-- A turn can take 5 to 20 seconds, mostly in the LLM, and an unclear checkout up to about
-  30 seconds more.
-- Hinglish is handled through `hi-IN`; Prisma v3 multi-language hints are not used yet.
+- **Food:** optional add-ons are not offered, and dishes that require add-ons or several separate
+  choices are left out. There is no "your usual". One restaurant per cart.
+- **Dineout:** free reservations only, since paid deals need UPI. Search works only for places with
+  documented coordinates: Bengaluru, Koramangala, Indiranagar, Mumbai, and Delhi. Its live
+  responses are text, so a format change would stop bookings rather than risk a wrong one. There is
+  no booking history to check, so a lost reply stays unknown until a person checks the app.
+- **Payment:** cash on delivery only.
+- **Voice:** tested with synthesized speech, not yet with people at a microphone. Kannada and Hindi
+  phrases need review by native speakers. Hinglish goes through `hi-IN`.
+- **Sessions:** in memory, so a restart loses the conversation but not the journal. One user, one
+  process, on this machine.
+- **Speed:** a turn can take 5 to 40 seconds, and an unclear checkout about 30 seconds more.

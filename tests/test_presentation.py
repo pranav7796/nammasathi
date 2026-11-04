@@ -123,3 +123,40 @@ def test_filler_is_dropped_when_there_is_a_real_answer() -> None:
         [Say("filler_search"), Say("ask_what_to_add")], language="en-IN", commerce_mode="swiggy"
     )
     assert text == _PHRASES["en-IN"]["ask_what_to_add"]
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_table_readback_speaks_a_date_the_voice_can_read(language: str) -> None:
+    say = Say(
+        "dining_readback",
+        data={
+            "restaurant": "Toscano",
+            "area": "Indiranagar",
+            "date": "2026-11-06",
+            "time": "07:00 PM",
+            "guests": "2",
+        },
+    )
+    text = response_text([say], language=language, commerce_mode="mock", domain="dining")
+    assert "06/11/2026" in text
+    assert "2026-11-06" not in text
+    assert "Toscano" in text
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_food_speaks_about_an_order_and_real_food_is_not_a_demo(language: str) -> None:
+    real = response_text(
+        [Say("order_placed")], language=language, commerce_mode="swiggy", domain="food"
+    )
+    assert not re.search(r"demo|डेमो|ಡೆಮೊ", real, re.IGNORECASE)
+    say = Say("clarification", data={"kind": "pack_size", "item": "dosa"}, lines=(RICE,))
+    text = response_text([say], language=language, commerce_mode="mock", domain="food")
+    assert "dosa" in text
+
+
+def test_dish_without_a_size_has_no_stray_comma() -> None:
+    dish = CartEntry("m", "m:", "Masala Dosa from Vidyarthi Bhavan", "", 1, 90)
+    say = Say("clarification", data={"kind": "pack_size", "item": "dosa"}, lines=(dish,))
+    text = response_text([say], language="en-IN", commerce_mode="mock", domain="food")
+    assert "Bhavan, ₹90" in text
+    assert ", ," not in text

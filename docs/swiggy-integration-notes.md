@@ -39,6 +39,26 @@ Docs: <https://mcp.swiggy.com/builders/docs/>. Key pages:
 | Refusal | `get_cart` was refused as not serviceable twice around 00:37 IST on 5 November, then succeeded on 10 of 10 reads from 00:38 IST. Swiggy's wording was not captured. Cause unknown. | Session start retries once; the reason is now logged with digits masked. |
 | Address | `selectedAddressDetails.flatNo` holds the flat number, separate from `address`. | Included in the readback. |
 
+## Food and Dineout, observed read-only (5 November 2026)
+
+Your session exposed 20 Food and 11 Dineout tools. One Swiggy login worked on all servers.
+
+| Topic | Observation | Consequence in code |
+|---|---|---|
+| Dineout search | Returns text with empty structured content, unlike the docs. `render_restaurants_dineout` returns the structured cards. | IDs come from search text, cards from render. |
+| Dineout slots | Also text only: `[FREE]` and `[PAID]` deals per date, and time-to-epoch lists. | `parse_free_slots`, tested against `tests/fixtures/dineout_slots_live.txt`. A changed format finds nothing, so nothing is booked. |
+| Paid Dineout deals | Need UPI through `create_cart`. | Never offered, and those tools are not callable. |
+| Empty Food cart | `{"data": null, "statusCode": ...}`, without a `success` key. | Read as an empty cart. |
+| Food search | Results across restaurants omit customizations. A scoped search has them. | Up to 5 scoped calls per search. |
+| Food add-ons | Scoped results list optional add-on groups. | Add-ons are not offered, and a dish requiring one is not offered. |
+| Food payment | `cod` is absent while the cart is empty. | Checked once the cart has items; unknown means blocked. |
+
+Not yet observed for Food and Dineout: a non-empty Food cart, `update_food_cart`,
+`place_food_order`, `book_table`, and `get_booking_status`. The live `place_food_order`
+description says to pass `paymentMethod="Cash"`, which the code follows. The live
+description also says there is no cart-value limit, while the Food recipe page mentions a
+₹1000 cap. Ajji's own limit applies in either case.
+
 ## Not yet observed
 
 These need a live checkout or a populated history, which has not been authorized.

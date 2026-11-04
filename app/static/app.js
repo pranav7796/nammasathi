@@ -83,6 +83,7 @@ const CAPABILITY_TITLES = { grocery: "Your groceries", food: "Your meal", dining
 function renderCart(data) {
   const isDining = data.capability === "dining";
   cartHeading.textContent = CAPABILITY_TITLES[data.capability] || "Your task";
+  catalogueNote.hidden = isDining;
   cartNode.replaceChildren();
   if (!data.cart.length) {
     const empty = document.createElement("li");
@@ -127,8 +128,13 @@ function renderCart(data) {
     READBACK: "Please review",
     CONFIRMED: "Confirmed",
     PLACING: isMock ? "Placing demo order" : "Placing your order",
-    VERIFYING: "Checking your order",
-    DONE: isMock ? "Demo order placed" : "Order placed",
+    CHOOSING_RESTAURANT: "Saathi has a question",
+    CHOOSING_SLOT: "Saathi has a question",
+    BOOKING: "Booking your table",
+    VERIFYING: isDining ? "Checking your booking" : "Checking your order",
+    DONE: isDining
+      ? (isMock ? "Demo table booked" : "Table booked")
+      : (isMock ? "Demo order placed" : "Order placed"),
     FAILED: "Checking your order",
     ORDER_UNKNOWN: "Order status unknown",
   };
@@ -190,7 +196,7 @@ function renderCart(data) {
 
 function renderOptions(data) {
   const options = data.options || [];
-  optionsPanel.hidden = !(data.state === "CLARIFYING" && options.length > 0);
+  optionsPanel.hidden = options.length === 0;
   optionsList.replaceChildren();
   options.forEach((option, index) => {
     const button = document.createElement("button");
@@ -212,7 +218,9 @@ function renderOrder(data, isMock) {
   if (unknown) {
     orderResult.textContent = "Saathi could not confirm this order. Please do not order again. Check the Swiggy app.";
   } else if (isMock) {
-    orderResult.textContent = "This was a demo. No real order was placed.";
+    orderResult.textContent = data.capability === "dining"
+      ? "This was a demo. No real table was booked."
+      : "This was a demo. No real order was placed.";
   } else if (data.order_partial) {
     orderResult.textContent = "Only part of this order was placed. Please check the Swiggy app.";
   } else if (data.order_verified) {
@@ -220,7 +228,8 @@ function renderOrder(data, isMock) {
   } else {
     orderResult.textContent = "Swiggy reported this order, but Saathi could not check it. Please look in the Swiggy app.";
   }
-  orderIds.textContent = ids.length ? `Order: ${ids.join(", ")}` : "";
+  const noun = data.capability === "dining" ? "Booking" : "Order";
+  orderIds.textContent = ids.length ? `${noun}: ${ids.join(", ")}` : "";
 }
 
 function renderReply(data) {

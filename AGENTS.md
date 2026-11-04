@@ -1,13 +1,14 @@
-# AGENTS.md --- Ajji Mart
+# AGENTS.md --- Namma Saathi
 
 ## 1. Project mission
 
-Build Ajji Mart: a voice-first grocery-ordering assistant for elderly
-users. The target interaction is Kannada, Hindi, and Hinglish. The
-intended pipeline is:
+Build Namma Saathi: a personal AI that helps people complete everyday tasks through
+natural voice conversation in Kannada, Hindi, and English. It grew out of Ajji Mart.
+The first three capabilities are Instamart groceries, Swiggy Food, and Swiggy Dineout table
+booking. The pipeline is:
 
-**Gnani Prisma STT → LLM intent extraction → deterministic state machine
-→ commerce adapter → Gnani Timbre TTS**
+**Gnani Prisma STT → LLM understanding → deterministic routing → one capability's state
+machine → provider adapter → Gnani Timbre TTS**
 
 The project is being built for the Gnani AI Great Indian AI Internship
 Challenge. The stated submission deadline is **10 November 2026, 11:59
@@ -100,6 +101,7 @@ Important distinctions:
 -   Read-only checks against the real account use
     `uv run python -m app.swiggy_preflight`, which cannot write and prints
     no personal data.
+-   Booking a real table uses its own switch, `ALLOW_REAL_BOOKING`.
 -   If production read-only access is later configured, explicitly
     disable checkout in the adapter as well as through configuration. Do
     not rely on a UI or prompt to enforce this.
@@ -152,7 +154,7 @@ cancellation capability exists; Swiggy directs cancellations to customer care.
 
 ## 7. State machine implementation rules
 
--   Keep `app/orchestrator/state_machine.py` pure: no network,
+-   Keep `app/orchestrator/state_machine.py` and `app/dining/state_machine.py` pure: no network,
     filesystem, database, clock, randomness, environment access, or
     logging.
 -   It should accept explicit current state/session data and an event,
@@ -273,6 +275,11 @@ Choose the relevant role for each task:
     cannot trigger side effects.
 
 ## 13. Repository layout
+
+`app/assistant/` routes turns between capabilities and owns no commerce logic. Groceries and
+food share `app/orchestrator/`, differing only by adapter (`app/commerce/`, `app/food/`).
+Table booking is `app/dining/`. All share one journal, `app/commerce/order_journal.py`.
+Do not build a generic agent framework or give the LLM tools.
 
 The current `pyproject.toml` configures Pyright to include `app` and
 `tests`. Therefore use **`app/` as the canonical application package for

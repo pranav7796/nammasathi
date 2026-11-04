@@ -484,7 +484,10 @@ def response_text(
         elif effect.template == "dining_options":
             parts.append(_render_dining_options(effect, phrases, language))
         elif effect.template == "dining_readback":
-            parts.append(phrases["dining_readback"].format(**effect.data))
+            # Gnani's text normalization reads DD/MM/YYYY as a date, so say it in that form.
+            year, month, day = effect.data["date"].split("-")
+            spoken = {**effect.data, "date": f"{day}/{month}/{year}"}
+            parts.append(phrases["dining_readback"].format(**spoken))
         elif effect.template in _REAL_VARIANTS and commerce_mode != "mock":
             parts.append(phrases.get(f"{effect.template}_real", phrases["intent_error"]))
         else:

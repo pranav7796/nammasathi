@@ -1,4 +1,4 @@
-# DESIGN.md --- Ajji Mart
+# DESIGN.md --- Namma Saathi
 
 **Project:** Voice-first grocery assistant for elderly users\
 **Competition:** Gnani AI Great Indian AI Internship Challenge\
@@ -7,7 +7,9 @@
 voice, after explicit authorization (`docs/first-real-order.md`). Mock
 commerce remains the default for development, tests, and demos.
 
-> **Status note.** Sections 2 and 14 record the original build sequence. The
+> **Status note.** Namma Saathi grew out of Ajji Mart, a grocery-only assistant, and most
+> of this document describes that shared order engine. §16 describes the assistant as a whole.
+> Sections 2 and 14 record the original build sequence. The
 > mock MVP and Gnani voice milestones are complete. §4, §5, §8, and §15 describe
 > the current system. Verified Swiggy behaviour is in
 > `docs/swiggy-integration-notes.md`.
@@ -666,3 +668,39 @@ verify in order history (or tracking) → speak only what is known.
 
 Operational tools: `app.swiggy_auth` (login), `app.swiggy_preflight` (read-only
 readiness), `app.order_admin` (inspect and settle attempts).
+
+------------------------------------------------------------------------
+
+## 16. Namma Saathi: one assistant over three capabilities
+
+``` text
+Voice (Prisma, Timbre)  ·  Browser (push-to-talk, tap options)
+                    │
+web.py  ── local-only in live mode
+                    │
+assistant/orchestrator.py   active task first, without the LLM; then understand and route
+   ├─ assistant/router.py        PURE: which capability; replies never leave the current task
+   ├─ llm/extractor.py           language only, with no tools
+   │
+   ├─ grocery ─┐  assistant/workflows.py → orchestrator/ (state machine, resolution, checkout)
+   ├─ food  ───┘       └─ commerce/swiggy.py | commerce/mock.py  /  food/swiggy.py | food/mock.py
+   └─ dining ──   dining/workflow.py → dining/state_machine.py (PURE)
+                       └─ dining/swiggy.py | dining/mock.py
+                    │
+commerce/order_journal.py   one durable journal for every real-world attempt
+voice/presentation.py       app-owned phrases per language and capability
+```
+
+Why this shape:
+
+- **Groceries and food share an engine** because they have the same safety shape: search,
+  cart, readback, explicit yes, checkout, reconcile, verify. A dish is a product and a size
+  is a variant. Duplicating that logic would mean duplicating its bugs.
+- **Dineout has its own small workflow** because a booking has no cart and no order history
+  to reconcile against. It has the same approval rules, and a lost reply is simply unknown.
+- **One journal** means an uncertain attempt anywhere blocks every real action until a person
+  settles it with `python -m app.order_admin`. Each capability only settles its own attempts.
+- **Routing is deterministic.** The LLM's suggested domain is only an input, and yes, no,
+  choices, and cancel are handled for the current task before the LLM is consulted.
+
+Limits are listed in the README.

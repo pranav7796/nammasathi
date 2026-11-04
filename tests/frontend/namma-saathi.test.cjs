@@ -314,6 +314,7 @@ test("restaurant options show no price and dishes with no size show no stray com
   });
   await tick();
   assert.equal(dining.elements["#options-list"].children[0].textContent, "1. Toscano, Indiranagar");
+  assert.equal(dining.elements["#options-panel"].hidden, false, "buttons show for table choices too");
   const food = makeApp({
     savedSession: "session-123",
     getPayload: payload({ capability: "food", state: "CLARIFYING", can_confirm: false, show_readback: false, options: [{ name: "Masala Dosa from Vidyarthi Bhavan", pack_size: "", quantity: 1, unit_price_inr: 90 }] }),
@@ -321,4 +322,15 @@ test("restaurant options show no price and dishes with no size show no stray com
   await tick();
   assert.equal(food.elements["#options-list"].children[0].textContent, "1. Masala Dosa from Vidyarthi Bhavan — ₹90");
   assert.equal(food.elements["#cart-heading"].textContent, "Your meal");
+});
+
+test("a demo table booking does not say an order was placed", async () => {
+  const app = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({ capability: "dining", state: "DONE", can_confirm: false, show_readback: false, order_ids: ["DN1"], order_verified: true }),
+  });
+  await tick();
+  assert.equal(app.elements["#state-label"].textContent, "Demo table booked");
+  assert.match(app.elements["#order-result"].textContent, /No real table/);
+  assert.match(app.elements["#order-ids"].textContent, /Booking: DN1/);
 });
