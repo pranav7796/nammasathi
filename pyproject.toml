@@ -10,6 +10,7 @@ dependencies = [
   "uvicorn",
   "pydantic>=2",
   "httpx",
+  "httpx2",
   "websockets",
   "mcp",
   "keyring",
@@ -22,9 +23,15 @@ dev = ["pytest", "pytest-asyncio", "hypothesis", "ruff", "pyright", "pre-commit"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = [".agents"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Spoken Kannada and Hindi sentences; wrapping them would make translation review harder.
+"app/voice/presentation.py" = ["E501", "RUF001"]
+"app/commerce/units.py" = ["RUF001"]
 
 [tool.pyright]
 include = ["app", "tests"]
@@ -36,5 +43,6 @@ venv = ".venv"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-q"
 markers = ["live: read-only tests requiring an authenticated Swiggy MCP session"]

@@ -1,14 +1,15 @@
 """Commerce Adapter interface (DESIGN.md §8).
 
-Models mirror the Swiggy Instamart MCP tool shapes documented in
-swiggy-docs-notes.md §3 (variants carry `spinId` + `skuId`; `update_cart`
-replaces the whole cart; `checkout` requires `addressId`). Swiggy JSON must not
-leak past this package: adapters translate into these models.
+Models mirror the Swiggy Instamart MCP tool shapes recorded in
+docs/swiggy-integration-notes.md (variants carry `spinId` + `skuId`;
+`update_cart` replaces the whole cart; `checkout` requires `addressId`). Swiggy
+JSON must not leak past this package: adapters translate into these models.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
@@ -19,6 +20,45 @@ class PaymentMethod(StrEnum):
     COD = "COD"  # Swiggy also accepts "Cash"
     UPI = "UPI"
     SWIGGY_PAY = "SwiggyPay"
+
+
+class CartIssue(StrEnum):
+    """A live cart condition that blocks confirmation until it is resolved."""
+
+    MIN_ORDER = "min_order"
+    OUT_OF_STOCK = "out_of_stock"
+    NOT_SERVICEABLE = "not_serviceable"
+    ADDRESS_MISMATCH = "address_mismatch"
+    PAYMENT_UNAVAILABLE = "payment_unavailable"
+    OTHER = "other"
+
+
+class RejectionKind(StrEnum):
+    """Why the provider refused an operation. Only `is_definitive` kinds prove no order exists."""
+
+    MIN_ORDER = "min_order"
+    OUT_OF_STOCK = "out_of_stock"
+    NOT_SERVICEABLE = "not_serviceable"
+    CART_EXPIRED = "cart_expired"
+    PAYMENT = "payment"
+    DUPLICATE = "duplicate"
+    OTHER = "other"
+
+    @property
+    def is_definitive(self) -> bool:
+        return self not in {RejectionKind.DUPLICATE, RejectionKind.OTHER}
+
+
+def same_address_id(first: str | None, second: str | None) -> bool:
+    """Whether two address IDs name the same address.
+
+    Observed live: get_addresses returns "<id>__<token>" while the cart's
+    selectedAddressDetails.id is the bare "<id>". Always pass the full ID from
+    get_addresses back to Swiggy; only comparisons use this.
+    """
+    if not first or not second:
+        return False
+    return first.split("__", maxsplit=1)[0] == second.split("__", maxsplit=1)[0]
 
 
 class Address(BaseModel):
@@ -33,11 +73,12 @@ class Address(BaseModel):
 class Variant(BaseModel):
     spin_id: str  # Swiggy spinId (SKU-level id)
     sku_id: str  # Swiggy skuId
-    pack_size: str  # human label, e.g. "1 kg", "500 ml"
-    quantity_value: float | None = None  # numeric size when the adapter provides it
-    unit: str | None = None  # "g" | "ml" | "pc" when the adapter provides it
-    price_inr: int
+    pack_size: str  # human label, e.g. "1 kg", "500 ml x 4"
+    quantity_value: float | None = None  # total numeric size; None when it cannot be parsed
+    unit: str | None = None  # "g" | "ml" | "pc"; None when it cannot be parsed
+    price_inr: Decimal
     in_stock: bool = True
+    max_quantity: int | None = None
 
 
 class Product(BaseModel):
@@ -45,6 +86,7 @@ class Product(BaseModel):
     display_name: str
     brand: str
     variants: list[Variant]
+    promoted: bool = False
 
 
 class SearchResult(BaseModel):
@@ -65,10 +107,10 @@ class CartItem(BaseModel):
     name: str
     pack_size: str
     quantity: int
-    unit_price_inr: int
+    unit_price_inr: Decimal
 
     @property
-    def line_total_inr(self) -> int:
+    def line_total_inr(self) -> Decimal:
         return self.unit_price_inr * self.quantity
 
 
@@ -77,11 +119,22 @@ class Cart(BaseModel):
     delivery_label: str | None = None
     delivery_address: str | None = None
     items: list[CartItem]
-    item_total_inr: int
-    delivery_fee_inr: int
-    grand_total_inr: int
+    item_total_inr: Decimal
+    delivery_fee_inr: Decimal  # every charge beyond the items: delivery, handling, other fees
+    grand_total_inr: Decimal
     payment_methods: list[PaymentMethod]
     errors: list[str] = Field(default_factory=lambda: list[str]())  # e.g. "Minimum order not met"
+    issues: list[CartIssue] = Field(default_factory=lambda: list[CartIssue]())
+    store_count: int = 1
+    lat: float | None = None
+    lng: float | None = None
+
+
+class PaymentOptions(BaseModel):
+    """Live payment facts for the current cart. Ajji only offers cash on delivery."""
+
+    cod_available: bool
+    cod_id: str | None = None
 
 
 class OrderResult(BaseModel):
@@ -89,6 +142,9 @@ class OrderResult(BaseModel):
     order_ids: list[str] = Field(default_factory=lambda: list[str]())  # multi-store => several
     message: str = ""
     probable_duplicate: bool = False  # Swiggy rejection hinting confirmDuplicate
+    partial: bool = False  # multi-store: at least one order placed, at least one failed
+    status: str = ""
+    total_inr: Decimal | None = None
 
 
 class OrderSummaryItem(BaseModel):
@@ -101,7 +157,7 @@ class OrderSummary(BaseModel):
     order_id: str
     created_at: datetime | None = None
     items: list[OrderSummaryItem]
-    total_inr: int
+    total_inr: Decimal
     status: str
     delivery_address_id: str | None = None
 
@@ -114,7 +170,56 @@ class OrderTracking(BaseModel):
 
 
 class CommerceError(Exception):
-    """Domain failure (Swiggy `success:false`). Terminal: surface, don't retry."""
+    """A commerce operation failed. Its outcome may be unknown unless a subclass says otherwise."""
+
+
+class CommerceAuthRequired(CommerceError):
+    """The account login is missing or expired. Nothing reached the provider."""
+
+
+class CommerceNotAttempted(CommerceError):
+    """A local guard refused the operation before anything was sent to the provider."""
+
+
+class CommerceWriteDisabled(CommerceNotAttempted):
+    """Configuration forbids mutating the real cart."""
+
+
+class CommerceRejected(CommerceError):
+    """The provider answered and refused the operation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: RejectionKind = RejectionKind.OTHER,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+def classify_rejection(message: str) -> RejectionKind | None:
+    """Map a provider message to a kind; None means a transient failure, not a refusal.
+
+    The provider has no symbolic error code: classification by message text is
+    the documented contract (https://mcp.swiggy.com/builders/docs/reference/errors.md).
+    """
+    text = message.casefold().replace("_", " ")
+    if any(word in text for word in ("timeout", "timed out", "internal", "temporar", "gateway")):
+        return None
+    if "duplicate" in text:
+        return RejectionKind.DUPLICATE
+    if "minimum order" in text or "min order" in text:
+        return RejectionKind.MIN_ORDER
+    if "out of stock" in text or "unavailable" in text or "sold out" in text:
+        return RejectionKind.OUT_OF_STOCK
+    if "serviceable" in text:
+        return RejectionKind.NOT_SERVICEABLE
+    if "cart expired" in text or "abandoned" in text or "cart is empty" in text:
+        return RejectionKind.CART_EXPIRED
+    if "payment" in text or "balance" in text:
+        return RejectionKind.PAYMENT
+    return RejectionKind.OTHER
 
 
 class CommerceAdapter(Protocol):
@@ -133,6 +238,8 @@ class CommerceAdapter(Protocol):
         ...
 
     async def get_cart(self) -> Cart: ...
+
+    async def get_payment_options(self) -> PaymentOptions: ...
 
     async def checkout(
         self,

@@ -46,6 +46,7 @@ def _adapter() -> SwiggyInstamart:
         redirect_handler=_show_authorization_url,
         callback_handler=read_oauth_redirect_from_input,
         allow_real_checkout=False,
+        allow_cart_writes=False,
     )
 
 

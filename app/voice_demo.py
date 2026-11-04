@@ -13,7 +13,7 @@ from app.config import load_settings
 from app.llm.extractor import GeminiIntentExtractor, IntentExtractionError
 from app.orchestrator.state_machine import CallStarted
 from app.orchestrator.turn_runner import TextTurnRunner
-from app.voice.gnani import GnaniError, PrismaSTT, TimbreTTS
+from app.voice.gnani import DEFAULT_VOICES, GnaniError, PrismaSTT, TimbreTTS
 from app.voice.presentation import response_text
 
 
@@ -29,7 +29,7 @@ async def run(audio_paths: list[Path], output_dir: Path, language: str) -> None:
     )
     tts = TimbreTTS(
         settings.gnani_api_key,
-        voice=settings.gnani_tts_voice,
+        voice=settings.gnani_tts_voice or DEFAULT_VOICES[language],
         language=language,
         model=settings.gnani_tts_model,
         speed=settings.gnani_tts_speed,
@@ -54,7 +54,7 @@ async def run(audio_paths: list[Path], output_dir: Path, language: str) -> None:
             transcript = await stt.transcribe(audio_path)
             print(f"You said: {transcript.text}")
             effects = await runner.dispatch_text(transcript.text)
-            message = response_text(effects, language=language)
+            message = response_text(effects, language=language, commerce_mode="mock")
             print(f"Ajji: {message}")
             if message:
                 turn += 1

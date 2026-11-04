@@ -18,6 +18,8 @@ import httpx
 STT_ENDPOINT = "https://api.vachana.ai/stt/v3"
 TTS_ENDPOINT = "https://api.vachana.ai/api/v1/tts/inference"
 SUPPORTED_LANGUAGES = {"kn-IN", "hi-IN", "en-IN"}
+# Each Timbre v2.5 voice has one preferred language (see available-voices above).
+DEFAULT_VOICES = {"kn-IN": "Saanvi", "hi-IN": "Nalini", "en-IN": "Kaveri"}
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".aac", ".m4a"}
 MAX_AUDIO_SECONDS = 30  # Official REST transcription limit (not the task's proposed 60).
 

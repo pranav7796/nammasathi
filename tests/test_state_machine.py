@@ -1,9 +1,9 @@
-"""State machine tests. These FAIL with NotImplementedError until Pranav implements
-`transition()` — that is expected. Agents: extend tests, don't implement the FSM."""
+"""State machine tests: every rule of `transition()` and its safety invariants."""
 
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 from hypothesis import given, settings
@@ -20,9 +20,12 @@ from app.orchestrator.state_machine import (
     Effect,
     Event,
     ItemsExtracted,
-    NotifyFamily,
+    OptionSelected,
+    OrderVerified,
     PlaceOrder,
+    PriorAttemptUnresolved,
     ReconcileResult,
+    RequestedItem,
     Say,
     Session,
     State,
@@ -41,6 +44,16 @@ ATTA_5KG = CartEntry("atta_5kg", "sku_atta_5kg", "Aashirvaad Atta", "5 kg", 1, 2
 
 def s(state: State, **kw: object) -> Session:
     return replace(Session(state=state), **kw)  # type: ignore[arg-type]
+
+
+def heard(session: Session) -> Session:
+    """The session right after this exact cart was read back to the user."""
+    digest = cart_hash(
+        session.cart, session.total_inr or None, session.address_id, session.payment_method
+    )
+    return replace(
+        session, cart_hash=digest, readback_version=session.cart_version, readback_hash=digest
+    )
 
 
 def place_orders(effects: list[Effect]) -> list[PlaceOrder]:
@@ -159,6 +172,8 @@ def test_readback_say_carries_lines_total_payment_and_address() -> None:
     assert readback.data == {
         "lines": "2 x 500 ml Nandini Toned Milk",
         "total": "52",
+        "fees": "0",
+        "stores": "1",
         "payment": "COD",
         "address_label": "Home",
         "address": "123 Home Road",
@@ -200,7 +215,8 @@ def test_readback_reject_to_collecting() -> None:
 
 def test_readback_confirm_places_exactly_one_order() -> None:
     nxt, eff = transition(
-        s(State.READBACK, cart=(MILK,), cart_version=1), UserConfirmed(1, hash_for_cart((MILK,)))
+        heard(s(State.READBACK, cart=(MILK,), cart_version=1)),
+        UserConfirmed(1, hash_for_cart((MILK,))),
     )
     assert nxt.state is State.PLACING
     orders = place_orders(eff)
@@ -213,7 +229,7 @@ def test_readback_confirm_places_exactly_one_order() -> None:
 def test_confirmation_and_place_order_carry_exact_cart_hash() -> None:
     cart_hash = hash_for_cart((MILK,))
     nxt, eff = transition(
-        s(State.READBACK, cart=(MILK,), cart_version=1), UserConfirmed(1, cart_hash)
+        heard(s(State.READBACK, cart=(MILK,), cart_version=1)), UserConfirmed(1, cart_hash)
     )
     orders = place_orders(eff)
     assert nxt.state is State.PLACING
@@ -237,13 +253,44 @@ def test_second_unclear_answer_returns_to_collecting() -> None:
     assert not place_orders(eff)
 
 
-def test_placing_success_to_done() -> None:
-    nxt, eff = transition(
-        s(State.PLACING, cart=(MILK,), cart_version=1, confirmed_version=1, attempt_no=1),
-        CheckoutSucceeded(("IM000001",)),
-    )
-    assert nxt.state is State.DONE
+def test_placing_success_is_verified_before_done() -> None:
+    placing = s(State.PLACING, cart=(MILK,), cart_version=1, confirmed_version=1, attempt_no=1)
+    nxt, eff = transition(placing, CheckoutSucceeded(("IM000001",)))
+    assert nxt.state is State.VERIFYING
     assert nxt.order_ids == ("IM000001",)
+    assert any(isinstance(e, CallCommerce) and e.op == "verify_order" for e in eff)
+    assert not says(eff), "success is not announced until it has been checked"
+    assert not place_orders(eff)
+
+    done, eff = transition(nxt, OrderVerified(verified=True, status="PLACED"))
+    assert done.state is State.DONE
+    assert done.order_verified is True
+    assert says(eff) == ["order_placed"]
+
+
+def test_unverified_order_is_not_announced_as_checked() -> None:
+    verifying = s(State.VERIFYING, cart=(MILK,), order_ids=("IM1",))
+    done, eff = transition(verifying, OrderVerified(verified=False))
+    assert done.state is State.DONE
+    assert done.order_verified is False
+    assert says(eff) == ["order_placed_unverified"]
+
+
+def test_problem_status_is_reported() -> None:
+    verifying = s(State.VERIFYING, cart=(MILK,), order_ids=("IM1",))
+    done, eff = transition(
+        verifying, OrderVerified(verified=True, status="CANCELLED", problem=True)
+    )
+    assert done.order_verified is False
+    assert says(eff) == ["order_problem"]
+
+
+def test_partial_order_is_reported_and_never_retried() -> None:
+    placing = s(State.PLACING, cart=(MILK,), cart_version=1, attempt_no=1)
+    verifying, _ = transition(placing, CheckoutSucceeded(("IM1",), partial=True))
+    done, eff = transition(verifying, OrderVerified(verified=True, status="PLACED"))
+    assert done.state is State.DONE
+    assert says(eff) == ["order_partial"]
     assert not place_orders(eff)
 
 
@@ -256,89 +303,243 @@ def test_placing_failure_to_failed_and_reconciles() -> None:
     assert not place_orders(eff), "never blind-retry checkout"
 
 
-def test_failed_reconcile_found_to_done() -> None:
+def test_failed_reconcile_found_is_verified() -> None:
     nxt, eff = transition(
-        s(State.FAILED, cart=(MILK,), cart_version=1, attempt_no=1),
-        ReconcileResult(
-            order_found=True,
-            order_ids=("IM000001",),
-            cart_hash=hash_for_cart((MILK,)),
-        ),
+        s(State.FAILED, cart=(MILK,), cart_version=1, attempt_no=1, cart_hash="h"),
+        ReconcileResult(order_found=True, order_ids=("IM000001",), cart_hash="h"),
     )
-    assert nxt.state is State.DONE
+    assert nxt.state is State.VERIFYING
+    assert nxt.order_ids == ("IM000001",)
     assert not place_orders(eff)
 
 
-def test_failed_reconcile_requires_matching_cart_hash() -> None:
+def test_failed_reconcile_with_wrong_hash_is_unknown_not_retryable() -> None:
     nxt, eff = transition(
-        s(State.FAILED, cart=(MILK,), cart_version=1, attempt_no=1),
+        s(State.FAILED, cart=(MILK,), cart_version=1, attempt_no=1, cart_hash="h"),
         ReconcileResult(order_found=True, order_ids=("IM000001",), cart_hash="wrong"),
     )
-    assert nxt.state is State.READBACK
+    assert nxt.state is State.ORDER_UNKNOWN
     assert not place_orders(eff)
 
 
-def test_failed_reconcile_not_found_to_readback() -> None:
+def test_uncertain_failure_not_found_is_unknown_and_cannot_be_confirmed() -> None:
     nxt, eff = transition(
-        s(State.FAILED, cart=(MILK,), cart_version=1, attempt_no=1),
-        ReconcileResult(order_found=False),
+        s(State.FAILED, cart=(MILK,), cart_version=1, attempt_no=1, failure_terminal=False),
+        ReconcileResult(order_found=False, confirmed_absent=True),
+    )
+    assert nxt.state is State.ORDER_UNKNOWN
+    assert says(eff) == ["order_unknown"]
+    again, eff = transition(nxt, UserConfirmed(1, hash_for_cart((MILK,))))
+    assert again.state is State.ORDER_UNKNOWN
+    assert not place_orders(eff)
+
+
+def test_refusal_without_proof_of_absence_is_unknown() -> None:
+    nxt, _ = transition(
+        s(State.FAILED, cart=(MILK,), cart_version=1, failure_terminal=True),
+        ReconcileResult(order_found=False, confirmed_absent=False),
+    )
+    assert nxt.state is State.ORDER_UNKNOWN
+
+
+def test_proven_refusal_returns_to_fresh_readback() -> None:
+    nxt, eff = transition(
+        s(State.FAILED, cart=(MILK,), cart_version=1, attempt_no=1, failure_terminal=True),
+        ReconcileResult(order_found=False, confirmed_absent=True),
     )
     assert nxt.state is State.READBACK
+    assert nxt.readback_version is None, "a fresh readback is required before another yes"
+    assert "order_rejected" in says(eff)
+    assert any(isinstance(e, CallCommerce) and e.op == "get_cart" for e in eff)
     assert not place_orders(eff)
 
 
-def test_retry_after_failed_uses_next_attempt_no() -> None:
-    sess = s(State.READBACK, cart=(MILK,), cart_version=1, attempt_no=1)
+def test_retry_after_proven_refusal_uses_next_attempt_no() -> None:
+    sess = heard(s(State.READBACK, cart=(MILK,), cart_version=1, attempt_no=1))
     _, eff = transition(sess, UserConfirmed(1, hash_for_cart((MILK,))))
     assert [o.attempt_no for o in place_orders(eff)] == [2]
 
 
-def test_terminal_failure_notifies_family() -> None:
-    _, eff = transition(
-        s(State.PLACING, cart=(MILK,), cart_version=1, attempt_no=1),
-        CheckoutFailed("Address not serviceable", terminal=True),
+def test_checkout_failure_outside_placing_changes_nothing() -> None:
+    for state in (State.COLLECTING, State.READBACK, State.DONE, State.ORDER_UNKNOWN):
+        session = s(state, cart=(MILK,), cart_version=1, order_ids=("IM1",))
+        nxt, eff = transition(session, CheckoutFailed("401 token expired", terminal=True))
+        assert nxt == session
+        assert not place_orders(eff)
+
+
+def test_user_is_not_told_an_order_exists_while_it_is_being_placed() -> None:
+    session = s(State.PLACING, cart=(MILK,), cart_version=1)
+    _, eff = transition(session, UserUtterance("cancel", "cancel"))
+    assert says(eff) == ["order_in_progress"]
+    assert "order_already_placed" not in says(eff)
+
+
+def test_prior_unresolved_attempt_blocks_a_new_session() -> None:
+    nxt, eff = transition(s(State.COLLECTING), PriorAttemptUnresolved())
+    assert nxt.state is State.ORDER_UNKNOWN
+    assert says(eff) == ["order_unknown"]
+
+
+def test_snapshot_never_reopens_a_settled_or_uncertain_order() -> None:
+    snapshot = CartSnapshotReceived(cart=(MILK,), total_inr=52, address_id="home")
+    for state in (State.FAILED, State.VERIFYING, State.DONE, State.ORDER_UNKNOWN):
+        session = s(state, cart=(RICE_1KG,), cart_version=1)
+        nxt, eff = transition(session, snapshot)
+        assert nxt == session
+        assert eff == []
+
+
+# ------------------------------------------------------------ readback binding
+def test_cart_never_read_back_cannot_be_confirmed() -> None:
+    session = s(State.READBACK, cart=(MILK,), cart_version=1)
+    nxt, eff = transition(session, UserConfirmed(1, hash_for_cart((MILK,))))
+    assert nxt.state is State.READBACK
+    assert not place_orders(eff)
+    assert "readback" in says(eff), "the user hears the cart instead"
+    # Having now heard it, the same yes is accepted.
+    _, eff = transition(nxt, UserConfirmed(1, hash_for_cart((MILK,))))
+    assert len(place_orders(eff)) == 1
+
+
+def test_cart_change_clears_the_readback_binding() -> None:
+    session = heard(s(State.READBACK, cart=(MILK,), cart_version=1))
+    nxt, _ = transition(session, ItemsExtracted(resolved=(ATTA_5KG,)))
+    assert nxt.readback_version is None
+    assert nxt.readback_hash == ""
+
+
+def test_snapshot_with_issue_blocks_confirmation_and_says_why() -> None:
+    session = s(State.READBACK, cart=(MILK,), cart_version=1)
+    blocked, eff = transition(
+        session,
+        CartSnapshotReceived(cart=(MILK,), total_inr=52, address_id=None, issues=("min_order",)),
     )
-    assert any(isinstance(e, NotifyFamily) for e in eff)
+    assert says(eff) == ["cart_blocked"]
+    assert blocked.readback_version is None
+    digest = blocked.cart_hash
+    nxt, eff = transition(blocked, UserConfirmed(blocked.cart_version, digest))
+    assert not place_orders(eff)
+    assert nxt.state is State.READBACK
 
 
-def test_min_order_failure_enters_clarifying() -> None:
-    nxt, _ = transition(
-        s(State.READBACK, cart=(MILK,), cart_version=1),
-        CheckoutFailed("Minimum order not met: ₹99"),
+def test_payment_method_is_bound_into_the_hash() -> None:
+    assert cart_hash((MILK,), 52, "home", "COD") != cart_hash((MILK,), 52, "home", "UPI")
+
+
+def test_paise_are_bound_into_the_hash() -> None:
+    assert cart_hash((MILK,), Decimal("52.50"), "home") != cart_hash((MILK,), 52, "home")
+
+
+# ------------------------------------------------------------ clarification context
+def _ask(*options: CartEntry, requested: str = "milk") -> Clarification:
+    return Clarification(
+        "ambiguous_item", "Which?", options, requested=RequestedItem(requested, 1, "litre")
+    )
+
+
+def test_question_keeps_resolved_lines_and_waiting_items() -> None:
+    later = RequestedItem("rice", 2, "kg")
+    nxt, eff = transition(
+        s(State.COLLECTING),
+        ItemsExtracted(resolved=(ATTA_5KG,), clarification=_ask(MILK), remaining=(later,)),
+    )
+    assert nxt.state is State.CLARIFYING
+    assert nxt.staged == (ATTA_5KG,)
+    assert nxt.queue == (later,)
+    assert nxt.cart == (), "nothing is written while a question is open"
+    assert not any(isinstance(e, CallCommerce) for e in eff)
+
+
+def test_choosing_an_option_continues_with_waiting_items() -> None:
+    later = RequestedItem("rice", 2, "kg")
+    session, _ = transition(
+        s(State.COLLECTING),
+        ItemsExtracted(resolved=(ATTA_5KG,), clarification=_ask(MILK), remaining=(later,)),
+    )
+    nxt, eff = transition(session, OptionSelected(0))
+    assert nxt.state is State.COLLECTING
+    assert nxt.staged == (ATTA_5KG, MILK)
+    search = next(e for e in eff if isinstance(e, CallCommerce))
+    assert search.op == "search"
+    assert search.items == (later,)
+    # When the rest resolves, everything is written once and read back together.
+    final, eff = transition(nxt, ItemsExtracted(resolved=(RICE_1KG,)))
+    assert final.state is State.READBACK
+    assert final.cart == (ATTA_5KG, MILK, RICE_1KG)
+    assert [e.op for e in eff if isinstance(e, CallCommerce)] == ["update_cart"]
+
+
+def test_choice_out_of_range_reasks_and_adds_nothing() -> None:
+    session = s(State.CLARIFYING, pending=_ask(MILK))
+    nxt, eff = transition(session, OptionSelected(5))
+    assert nxt.state is State.CLARIFYING
+    assert nxt.staged == ()
+    assert says(eff) == ["clarification"]
+
+
+def test_unclear_answer_reasks_then_skips_without_guessing() -> None:
+    session = s(State.CLARIFYING, pending=_ask(MILK))
+    for _ in range(2):
+        session, eff = transition(session, UserUtterance("hmm", "unclear"))
+        assert says(eff) == ["clarification"]
+    session, eff = transition(session, UserUtterance("hmm", "unclear"))
+    assert "item_skipped" in says(eff)
+    assert session.cart == ()
+    assert session.pending is None
+
+
+def test_no_skips_only_the_open_question() -> None:
+    later = RequestedItem("rice", 2, "kg")
+    session, _ = transition(
+        s(State.COLLECTING),
+        ItemsExtracted(resolved=(ATTA_5KG,), clarification=_ask(MILK), remaining=(later,)),
+    )
+    nxt, eff = transition(session, UserRejected())
+    assert "item_skipped" in says(eff)
+    assert nxt.staged == (ATTA_5KG,)
+    assert any(isinstance(e, CallCommerce) and e.items == (later,) for e in eff)
+
+
+def test_new_item_during_a_question_does_not_lose_the_question() -> None:
+    session = s(State.CLARIFYING, pending=_ask(MILK))
+    sugar = RequestedItem("sugar", 1, "kg")
+    _, eff = transition(session, UserUtterance("also sugar", "add", (sugar,)))
+    search = next(e for e in eff if isinstance(e, CallCommerce))
+    assert [item.name for item in search.items] == ["sugar", "milk"]
+
+
+def test_restating_the_item_replaces_the_question() -> None:
+    session = s(State.CLARIFYING, pending=_ask(MILK))
+    restated = RequestedItem("nandini milk", 1, "litre")
+    _, eff = transition(session, UserUtterance("nandini milk", "add", (restated,)))
+    search = next(e for e in eff if isinstance(e, CallCommerce))
+    assert search.items == (restated,)
+
+
+def test_add_during_a_removal_question_cannot_add_lines_staged_for_removal() -> None:
+    session = s(
+        State.CLARIFYING,
+        cart=(MILK, RICE_1KG),
+        pending=replace(_ask(MILK, RICE_1KG), operation="remove"),
+        staged=(ATTA_5KG,),
+        staged_edit="remove",
+    )
+    nxt, eff = transition(session, UserUtterance("add sugar", "add", (RequestedItem("sugar", 1),)))
+    assert nxt.state is State.CLARIFYING
+    assert nxt.staged == (ATTA_5KG,)
+    assert nxt.cart == (MILK, RICE_1KG)
+    assert says(eff) == ["clarification"]
+
+
+def test_snapshot_during_question_does_not_interrupt_it() -> None:
+    session = s(State.CLARIFYING, pending=_ask(MILK), cart=(RICE_1KG,), cart_version=1)
+    nxt, eff = transition(
+        session, CartSnapshotReceived(cart=(RICE_1KG,), total_inr=156, address_id=None)
     )
     assert nxt.state is State.CLARIFYING
     assert nxt.pending is not None
-    assert nxt.pending.kind == "min_order"
-
-
-def test_cart_expired_rebuilds_from_adapter() -> None:
-    nxt, eff = transition(
-        s(State.READBACK, cart=(MILK,), cart_version=1), CheckoutFailed("cart expired")
-    )
-    assert nxt.state is State.COLLECTING
-    assert any(isinstance(e, CallCommerce) and e.op == "get_cart" for e in eff)
-
-
-def test_cart_changed_during_placing_returns_to_readback() -> None:
-    nxt, eff = transition(
-        s(State.PLACING, cart=(MILK,), cart_version=1), CheckoutFailed("cart_changed")
-    )
-    assert nxt.state is State.READBACK
-    assert "cart_changed" in says(eff)
-    assert not place_orders(eff)
-
-
-def test_expired_authentication_fails_without_state_machine_retry() -> None:
-    nxt, eff = transition(s(State.COLLECTING), CheckoutFailed("401 token expired", terminal=True))
-    assert nxt.state is State.FAILED
-    assert any(isinstance(e, NotifyFamily) for e in eff)
-
-
-def test_rate_limit_emits_filler_without_retrying_in_state_machine() -> None:
-    nxt, eff = transition(s(State.COLLECTING), CheckoutFailed("429 Retry-After: 1"))
-    assert nxt == s(State.COLLECTING)
-    assert says(eff) == ["filler_search"]
-    assert not any(isinstance(e, CallCommerce) for e in eff)
+    assert eff == []
 
 
 # ------------------------------------------------------------ readback edits
@@ -432,6 +633,30 @@ def test_property_place_order_only_after_confirming_latest_cart(seq: list[Event]
         assert len(place_orders(eff)) <= 1
 
 
+@settings(max_examples=300, deadline=None)
+@given(st.lists(st.one_of(events, st.just("confirm-current")), max_size=40))
+def test_property_only_a_heard_clean_cart_is_ever_ordered(seq: list[Event | str]) -> None:
+    """Same rule when the fuzzer can send a yes carrying the session's real version and hash."""
+    sess = Session()
+    for step in seq:
+        ev: Event = (
+            UserConfirmed(sess.cart_version, sess.readback_hash)
+            if step == "confirm-current"
+            else step  # type: ignore[assignment]
+        )
+        prev = sess
+        sess, eff = transition(sess, ev)
+        if place_orders(eff):
+            assert prev.state is State.READBACK
+            assert prev.readback_version == prev.cart_version
+            assert not prev.issues
+            assert prev.cart
+        if prev.state in (State.ORDER_UNKNOWN, State.FAILED, State.VERIFYING, State.DONE):
+            assert not place_orders(eff), "a settled or uncertain order is never placed again"
+        if prev.state is State.ORDER_UNKNOWN:
+            assert sess.state is State.ORDER_UNKNOWN, "ORDER_UNKNOWN is terminal"
+
+
 @settings(max_examples=200, deadline=None)
 @given(st.lists(events, max_size=40))
 def test_property_transition_is_pure(seq: list[Event]) -> None:
@@ -455,6 +680,9 @@ def test_every_state_handles_every_event_type_without_crashing(state: State) -> 
         CheckoutSucceeded(("IM1",)),
         CheckoutFailed("x"),
         ReconcileResult(order_found=False),
+        OptionSelected(0),
+        OrderVerified(verified=False),
+        PriorAttemptUnresolved(),
     ]
     for ev in sample:
         transition(s(state), ev)

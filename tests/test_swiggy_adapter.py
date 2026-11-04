@@ -9,11 +9,25 @@ import pytest
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.auth.exceptions import OAuthTokenError
 from mcp.shared.auth import AuthorizationCodeResult, OAuthToken
+from mcp.types import TextContent
 
-from app.commerce.base import CartLine, CommerceError, PaymentMethod
+from app.commerce.base import (
+    Cart,
+    CartIssue,
+    CartLine,
+    CommerceAuthRequired,
+    CommerceError,
+    CommerceNotAttempted,
+    CommerceRejected,
+    CommerceWriteDisabled,
+    OrderResult,
+    PaymentMethod,
+    RejectionKind,
+)
 from app.commerce.swiggy import (
     OAUTH_REDIRECT_URI,
     SWIGGY_MCP_URL,
+    SWIGGY_STAGING_MCP_URL,
     KeyringTokenStorage,
     SecureCredentialStoreUnavailable,
     SwiggyDiagnosticError,
@@ -49,7 +63,7 @@ class FailSafeSecretServiceKeyring(FakeKeyring):
     __module__ = "keyring.backends.SecretService"
 
 
-def _adapter(*, checkout: bool = False) -> SwiggyInstamart:
+def _adapter(*, checkout: bool = False, cart_writes: bool = True) -> SwiggyInstamart:
     return SwiggyInstamart(
         endpoint=SWIGGY_MCP_URL,
         redirect_uri=OAUTH_REDIRECT_URI,
@@ -57,6 +71,7 @@ def _adapter(*, checkout: bool = False) -> SwiggyInstamart:
         redirect_handler=_no_redirect,
         callback_handler=_no_callback,
         allow_real_checkout=checkout,
+        allow_cart_writes=cart_writes,
     )
 
 
@@ -266,7 +281,10 @@ class FakeMcpSession:
             raise self.initialize_error
         return None
 
-    async def call_tool(self, name: str, arguments: dict[str, object]) -> FakeMcpResult:
+    async def call_tool(
+        self, name: str, arguments: dict[str, object], *, read_timeout_seconds: float
+    ) -> FakeMcpResult:
+        assert read_timeout_seconds > 5, "the 5 s default would turn slow checkouts into unknowns"
         self.calls.append({"name": name, "arguments": arguments})
         if self.tool_error is not None and name == self.tool_error_name:
             raise self.tool_error
@@ -378,7 +396,7 @@ def test_empty_direct_payload_is_not_rejected_for_missing_data_key(
     _patch_mcp(monkeypatch, FakeMcpResult({}))
     adapter = cast(Any, _adapter())
 
-    payload, message = asyncio.run(adapter._call_with_message("example_tool", {}))
+    payload, message = asyncio.run(adapter._call_with_message("get_cart", {}))
 
     assert payload == {}
     assert message == ""
@@ -575,7 +593,8 @@ def test_mcp_is_error_result_is_rejected(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_malformed_mcp_response_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_mcp(monkeypatch, FakeMcpResult({"success": True, "data": {"items": []}}))
+    populated = {"items": [cast(dict[str, Any], _cart_payload()["data"])["items"][0]]}
+    _patch_mcp(monkeypatch, FakeMcpResult({"success": True, "data": populated}))
 
     with pytest.raises(CommerceError, match="billBreakdown"):
         asyncio.run(_adapter().get_cart())
@@ -704,3 +723,654 @@ def test_checkout_timeout_is_not_retried_and_reports_unknown_outcome(
     with pytest.raises(TimeoutError, match="outcome is unknown"):
         asyncio.run(adapter.checkout("addr-1", PaymentMethod.COD))
     assert [call["name"] for call in calls] == ["get_cart", "checkout"]
+
+
+# ------------------------------------------------- shapes observed from the live server
+def _live_search_payload() -> dict[str, object]:
+    def variation(spin: str, pack: str, price: object = 58) -> dict[str, object]:
+        return {
+            "spinId": spin,
+            "skuId": f"sku-{spin}",
+            "displayName": "Amul Gold Pasteurised Full Cream Milk",  # live: repeats the product
+            "quantityDescription": pack,
+            "brandName": "Amul",
+            "price": {"mrp": 60, "offerPrice": price},
+            "isInStockAndAvailable": True,
+            "maxQuantity": 6,
+        }
+
+    return {
+        "success": True,
+        "data": {
+            "nextOffset": "20",
+            "products": [
+                {
+                    "productId": "p1",
+                    "displayName": "Amul Gold Pasteurised Full Cream Milk",
+                    "brand": "Amul",
+                    "isPromoted": True,
+                    "variations": [
+                        variation("a4", "500 ml x 4", 118),
+                        variation("a1", "500 ml", 30.5),
+                        variation("odd", "family bottle"),
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def _live_cart_payload() -> dict[str, object]:
+    """get_cart as observed: no availablePaymentMethods, multiple fees, paise, coordinates."""
+    return {
+        "success": True,
+        "data": {
+            "selectedAddress": "Home",
+            "selectedAddressDetails": {
+                "id": "addr-1",
+                "address": "12 Example Road",
+                "area": "Indiranagar",
+                "category": "Home",
+                "lat": 12.97,
+                "lng": 77.64,
+            },
+            "cartId": "cart-1",
+            "cartTotalAmount": "₹87",
+            "items": [
+                {
+                    "spinId": "s1",
+                    "skuId": "k1",
+                    "productId": "p1",
+                    "itemName": "Amul Milk",
+                    "itemVariant": "500 ml",
+                    "quantity": 2,
+                    "isInStockAndAvailable": True,
+                    "mrp": 32,
+                    "discountedFinalPrice": 30,
+                    "storeId": 111,
+                }
+            ],
+            "billBreakdown": {
+                "lineItems": [
+                    {"label": "Item Total", "value": "₹60"},
+                    {"label": "Handling Fee", "value": "₹9.50"},
+                    {"label": "Delivery Partner Fee", "value": "₹14"},
+                    {"label": "Rain Fee", "value": "₹3"},
+                ],
+                "toPay": {"label": "To Pay", "value": "₹86.50"},
+            },
+        },
+    }
+
+
+def test_live_variant_uses_quantity_description_and_parses_sizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_mcp(monkeypatch, FakeMcpResult(_live_search_payload()))
+
+    product = asyncio.run(_adapter().search_products("addr-1", "milk")).products[0]
+
+    four, one, odd = product.variants
+    assert four.pack_size == "500 ml x 4"
+    assert (four.quantity_value, four.unit) == (2000.0, "ml")
+    assert four.max_quantity == 6
+    assert (one.quantity_value, one.unit) == (500.0, "ml")
+    assert str(one.price_inr) == "30.5", "paise are kept"
+    assert (odd.quantity_value, odd.unit) == (None, None), "unknown sizes are not guessed"
+    assert product.promoted is True
+
+
+def test_live_cart_maps_fees_paise_coordinates_and_stores(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_mcp(monkeypatch, FakeMcpResult(_live_cart_payload()))
+
+    cart = asyncio.run(_adapter().get_cart())
+
+    assert str(cart.grand_total_inr) == "86.50"
+    assert cart.items[0].unit_price_inr == 30
+    assert cart.item_total_inr == 60
+    assert str(cart.delivery_fee_inr) == "26.50"
+    assert (cart.lat, cart.lng) == (12.97, 77.64)
+    assert cart.store_count == 1
+    assert cart.issues == []
+
+
+def test_line_total_style_price_is_detected_from_the_bill(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _live_cart_payload()
+    data = cast(dict[str, Any], payload["data"])
+    data["items"][0]["discountedFinalPrice"] = 60  # 2 packs billed as one line total
+    _patch_mcp(monkeypatch, FakeMcpResult(payload))
+
+    cart = asyncio.run(_adapter().get_cart())
+
+    assert cart.items[0].unit_price_inr == 30
+    assert cart.item_total_inr == 60
+
+
+def test_multi_store_cart_is_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _live_cart_payload()
+    data = cast(dict[str, Any], payload["data"])
+    data["items"].append({**data["items"][0], "spinId": "s2", "skuId": "k2", "storeId": 222})
+    _patch_mcp(monkeypatch, FakeMcpResult(payload))
+
+    assert asyncio.run(_adapter().get_cart()).store_count == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "issue"),
+    [
+        ("unserviceableItems", [{"spinId": "x"}], CartIssue.NOT_SERVICEABLE),
+        ("addressWarning", "Delivery may not reach you", CartIssue.OTHER),
+        ("cartWarning", {"statusCode": 1, "message": "Minimum order not met"}, CartIssue.MIN_ORDER),
+    ],
+)
+def test_cart_warnings_become_blocking_issues(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: object, issue: CartIssue
+) -> None:
+    payload = _live_cart_payload()
+    cast(dict[str, Any], payload["data"])[field] = value
+    _patch_mcp(monkeypatch, FakeMcpResult(payload))
+
+    assert issue in asyncio.run(_adapter().get_cart()).issues
+
+
+def test_out_of_stock_cart_line_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _live_cart_payload()
+    cast(dict[str, Any], payload["data"])["items"][0]["isInStockAndAvailable"] = False
+    _patch_mcp(monkeypatch, FakeMcpResult(payload))
+
+    assert CartIssue.OUT_OF_STOCK in asyncio.run(_adapter().get_cart()).issues
+
+
+@pytest.mark.parametrize("data", [{"cartAbsent": True}, {"items": []}])
+def test_empty_cart_shapes_read_as_empty(
+    monkeypatch: pytest.MonkeyPatch, data: dict[str, object]
+) -> None:
+    _patch_mcp(monkeypatch, FakeMcpResult({"success": True, "data": data}))
+
+    cart = asyncio.run(_adapter().get_cart())
+
+    assert cart.items == []
+    assert cart.grand_total_inr == 0
+
+
+def test_cart_writes_are_off_unless_explicitly_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_mcp(monkeypatch, FakeMcpResult(_cart_payload()))
+    adapter = SwiggyInstamart(
+        endpoint=SWIGGY_MCP_URL,
+        redirect_uri=OAUTH_REDIRECT_URI,
+        storage=KeyringTokenStorage(FakeKeyring()),
+        redirect_handler=_no_redirect,
+        callback_handler=_no_callback,
+    )
+
+    with pytest.raises(CommerceWriteDisabled):
+        asyncio.run(adapter.update_cart("addr-1", [CartLine(spin_id="s", sku_id="k", quantity=1)]))
+
+    assert calls == [], "nothing was sent"
+
+
+@pytest.mark.parametrize("tool", ["clear_cart", "create_address", "confirm_order", "apply_coupon"])
+def test_tools_outside_the_allowlist_cannot_be_called(
+    monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    calls = _patch_mcp(monkeypatch, FakeMcpResult({}))
+    adapter = cast(Any, _adapter(checkout=True))
+
+    with pytest.raises(CommerceNotAttempted):
+        asyncio.run(adapter._call_with_message(tool, {}))
+
+    assert calls == []
+
+
+def test_tool_calls_share_one_mcp_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Docs: "Never create a new initialize handshake per tool invocation"."""
+    calls = _patch_mcp(monkeypatch, FakeMcpResult(_cart_payload()))
+    sessions: list[object] = []
+    real = FakeMcpSession.initialize
+
+    async def counting(self: FakeMcpSession) -> None:
+        sessions.append(self)
+        await real(self)
+
+    monkeypatch.setattr(FakeMcpSession, "initialize", counting)
+    adapter = _adapter()
+
+    async def several() -> None:
+        await adapter.get_cart()
+        await adapter.get_cart()
+        await adapter.get_cart()
+        await adapter.aclose()
+
+    asyncio.run(several())
+
+    assert len(calls) == 3
+    assert len(sessions) == 1
+
+
+def test_session_reconnects_after_a_transport_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_mcp(
+        monkeypatch,
+        FakeMcpResult(_cart_payload()),
+        tool_error=RuntimeError("stream closed"),
+        tool_error_name="search_products",
+    )
+    adapter = _adapter()
+
+    async def scenario() -> Cart:
+        with pytest.raises(SwiggyDiagnosticError):
+            await adapter.search_products("addr-1", "milk")
+        return await adapter.get_cart()
+
+    assert asyncio.run(scenario()).grand_total_inr == 70
+    assert [call["name"] for call in calls] == ["search_products", "get_cart"]
+
+
+def test_idle_session_closes_and_the_next_call_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_mcp(monkeypatch, FakeMcpResult(_cart_payload()))
+    monkeypatch.setattr("app.commerce.swiggy._SESSION_IDLE_SECONDS", 0.01)
+    adapter = _adapter()
+
+    async def scenario() -> None:
+        await adapter.get_cart()
+        await asyncio.sleep(0.05)
+        await adapter.get_cart()
+        await asyncio.wait_for(adapter.aclose(), 1)
+
+    asyncio.run(asyncio.wait_for(scenario(), 2))
+
+    assert len(calls) == 2
+
+
+def test_calls_queued_while_the_session_closes_never_hang(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_mcp(
+        monkeypatch,
+        FakeMcpResult(_cart_payload()),
+        tool_error=RuntimeError("stream closed"),
+        tool_error_name="search_products",
+    )
+    adapter = _adapter()
+
+    async def scenario() -> tuple[object, object]:
+        return await asyncio.gather(
+            adapter.search_products("addr-1", "milk"),
+            adapter.get_cart(),
+            return_exceptions=True,
+        )
+
+    failed, cart = asyncio.run(asyncio.wait_for(scenario(), 2))
+
+    assert isinstance(failed, SwiggyDiagnosticError)
+    assert isinstance(cart, Cart), "the unsent call was resent on a new session"
+    assert [call["name"] for call in calls] == ["search_products", "get_cart"]
+
+
+def test_checkout_that_may_have_been_sent_is_never_resent(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _scripted(
+        monkeypatch,
+        get_cart=FakeMcpResult(_live_cart_payload()),
+        get_payment_options=FakeMcpResult(_payment_payload(True)),
+    )
+    original = _ScriptedSession.call_tool
+
+    async def lost(
+        self: _ScriptedSession,
+        name: str,
+        arguments: dict[str, object],
+        *,
+        read_timeout_seconds: float,
+    ) -> FakeMcpResult:
+        if name == "checkout":
+            calls.append({"name": name, "arguments": arguments})
+            raise RuntimeError("connection lost mid-request")
+        return await original(self, name, arguments, read_timeout_seconds=read_timeout_seconds)
+
+    monkeypatch.setattr(_ScriptedSession, "call_tool", lost)
+    adapter = _adapter(checkout=True)
+
+    async def scenario() -> None:
+        await adapter.get_cart()
+        await adapter.get_payment_options()
+        await adapter.checkout("addr-1")
+
+    with pytest.raises(CommerceError):
+        asyncio.run(scenario())
+    assert [call["name"] for call in calls].count("checkout") == 1
+
+
+def test_http_client_uses_long_enough_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+    _patch_mcp(monkeypatch, FakeMcpResult(_cart_payload()))
+
+    def capture(**kwargs: object) -> FakeAsyncContext:
+        seen.update(kwargs)
+        return FakeAsyncContext()
+
+    monkeypatch.setattr("app.commerce.swiggy.httpx2.AsyncClient", capture)
+    asyncio.run(_adapter().get_cart())
+
+    timeout = cast(Any, seen["timeout"])
+    assert timeout.read >= 60
+
+
+# ------------------------------------------------- COD is verified, not assumed
+def _payment_payload(available: bool, cod_id: str = "COD") -> dict[str, object]:
+    return {
+        "success": True,
+        "data": {
+            "cod": {"available": available, "id": cod_id, "displayName": "Pay on delivery"},
+            "allMethods": [],
+            "agenticPaymentEligible": False,
+            "placeOrderToolName": "checkout",
+        },
+    }
+
+
+class _ScriptedSession(FakeMcpSession):
+    responses: dict[str, FakeMcpResult] = {}  # noqa: RUF012
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, object], *, read_timeout_seconds: float
+    ) -> FakeMcpResult:
+        await super().call_tool(name, arguments, read_timeout_seconds=read_timeout_seconds)
+        return self.responses[name]
+
+
+def _scripted(
+    monkeypatch: pytest.MonkeyPatch, **responses: FakeMcpResult
+) -> list[dict[str, object]]:
+    calls = _patch_mcp(monkeypatch, FakeMcpResult({}))
+    _ScriptedSession.responses = responses
+
+    def client_session(read_stream: object, write_stream: object) -> FakeMcpSession:
+        del read_stream, write_stream
+        return _ScriptedSession(FakeMcpResult({}), calls)
+
+    monkeypatch.setattr("app.commerce.swiggy.ClientSession", client_session)
+    return calls
+
+
+def _checkout_with(
+    monkeypatch: pytest.MonkeyPatch, checkout: dict[str, object], *, cod: bool = True
+) -> tuple[OrderResult, list[dict[str, object]]]:
+    calls = _scripted(
+        monkeypatch,
+        get_cart=FakeMcpResult(_live_cart_payload()),
+        get_payment_options=FakeMcpResult(_payment_payload(cod)),
+        checkout=FakeMcpResult(checkout),
+    )
+    adapter = _adapter(checkout=True)
+
+    async def scenario() -> OrderResult:
+        await adapter.get_cart()
+        await adapter.get_payment_options()
+        return await adapter.checkout("addr-1", PaymentMethod.COD)
+
+    return asyncio.run(scenario()), calls
+
+
+def test_checkout_works_when_live_cart_omits_payment_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, calls = _checkout_with(
+        monkeypatch,
+        {
+            "success": True,
+            "message": "Instamart order placed successfully",
+            "data": {
+                "orderId": "O1",
+                "status": "PLACED",
+                "paymentMethod": "COD",
+                "cartTotal": 86.5,
+            },
+        },
+    )
+
+    assert result.success is True
+    assert result.order_ids == ["O1"]
+    assert result.message == "Instamart order placed successfully"
+    assert str(result.total_inr) == "86.5"
+    assert calls[-1] == {
+        "name": "checkout",
+        "arguments": {"addressId": "addr-1", "paymentMethod": "COD"},
+    }
+
+
+def test_checkout_is_refused_locally_when_cod_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _scripted(
+        monkeypatch,
+        get_cart=FakeMcpResult(_live_cart_payload()),
+        get_payment_options=FakeMcpResult(_payment_payload(False)),
+    )
+    adapter = _adapter(checkout=True)
+
+    async def scenario() -> None:
+        await adapter.get_cart()
+        assert (await adapter.get_payment_options()).cod_available is False
+        await adapter.checkout("addr-1", PaymentMethod.COD)
+
+    with pytest.raises(CommerceNotAttempted):
+        asyncio.run(scenario())
+    assert "checkout" not in [call["name"] for call in calls]
+
+
+def test_only_cash_on_delivery_can_be_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_mcp(monkeypatch, FakeMcpResult(_cart_payload()))
+    adapter = _adapter(checkout=True)
+    asyncio.run(adapter.get_cart())
+
+    with pytest.raises(CommerceNotAttempted):
+        asyncio.run(adapter.checkout("addr-1", PaymentMethod.UPI))
+    assert [call["name"] for call in calls] == ["get_cart"]
+
+
+def test_pending_payment_is_not_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, _ = _checkout_with(
+        monkeypatch,
+        {"success": True, "data": {"orderId": "O1", "status": "PENDING_PAYMENT"}},
+    )
+    assert result.success is False
+    assert result.order_ids == ["O1"]
+
+
+def test_partial_multi_store_result_keeps_the_placed_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, _ = _checkout_with(
+        monkeypatch,
+        {
+            "success": True,
+            "data": {
+                "orders": [{"orderId": "A", "status": "PLACED"}, {"error": "store closed"}],
+                "orderCount": 2,
+                "successCount": 1,
+                "failureCount": 1,
+                "allSucceeded": False,
+            },
+        },
+    )
+    assert result.success is False
+    assert result.partial is True
+    assert result.order_ids == ["A"]
+
+
+def test_full_multi_store_result_is_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, _ = _checkout_with(
+        monkeypatch,
+        {
+            "success": True,
+            "data": {"orders": [{"orderId": "A"}, {"orderId": "B"}], "allSucceeded": True},
+        },
+    )
+    assert result.success is True
+    assert result.partial is False
+    assert result.order_ids == ["A", "B"]
+
+
+# ------------------------------------------------- provider failures stay meaningful
+@pytest.mark.parametrize(
+    ("message", "kind"),
+    [
+        ("Minimum order not met", RejectionKind.MIN_ORDER),
+        ("Item out of stock at this address", RejectionKind.OUT_OF_STOCK),
+        ("Address not serviceable", RejectionKind.NOT_SERVICEABLE),
+        ("Cart expired", RejectionKind.CART_EXPIRED),
+        ("Probable duplicate order", RejectionKind.DUPLICATE),
+        ("Swiggy Money balance is too low", RejectionKind.PAYMENT),
+        ("Something unexpected", RejectionKind.OTHER),
+    ],
+)
+def test_refusal_message_is_classified_but_never_exposed(
+    monkeypatch: pytest.MonkeyPatch, message: str, kind: RejectionKind
+) -> None:
+    _patch_mcp(monkeypatch, FakeMcpResult({"success": False, "error": {"message": message}}))
+
+    with pytest.raises(CommerceRejected) as error:
+        asyncio.run(_adapter().get_cart())
+
+    assert error.value.kind is kind
+    assert message not in str(error.value)
+
+
+@pytest.mark.parametrize("message", ["Upstream timeout", "Internal error", "Bad gateway"])
+def test_transient_failure_is_not_a_refusal(monkeypatch: pytest.MonkeyPatch, message: str) -> None:
+    _patch_mcp(monkeypatch, FakeMcpResult({"success": False, "error": {"message": message}}))
+
+    with pytest.raises(CommerceError) as error:
+        asyncio.run(_adapter().get_cart())
+
+    assert not isinstance(error.value, CommerceRejected)
+
+
+def test_only_specific_refusals_prove_no_order_exists() -> None:
+    assert RejectionKind.MIN_ORDER.is_definitive
+    assert not RejectionKind.DUPLICATE.is_definitive
+    assert not RejectionKind.OTHER.is_definitive
+
+
+def test_error_result_text_is_classified(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = FakeMcpResult(None, is_error=True)
+    result.content = [TextContent(type="text", text="Address not serviceable")]
+    _patch_mcp(monkeypatch, result)
+
+    with pytest.raises(CommerceRejected) as error:
+        asyncio.run(_adapter().get_cart())
+
+    assert error.value.kind is RejectionKind.NOT_SERVICEABLE
+
+
+# ------------------------------------------------- order history tolerates unknown formats
+def _orders_payload(**order: object) -> dict[str, object]:
+    orders: list[dict[str, object]] = [{"orderId": "O1", **order}]
+    return {"success": True, "data": {"orders": orders, "hasMore": False}}
+
+
+def test_unparsable_order_date_does_not_break_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_mcp(
+        monkeypatch,
+        FakeMcpResult(
+            _orders_payload(createdAt="yesterday-ish", totalAmount=86.5, currentStatus="X")
+        ),
+    )
+
+    [order] = asyncio.run(_adapter().get_orders())
+
+    assert order.order_id == "O1"
+    assert order.created_at is None
+    assert order.status == "X"
+
+
+def test_order_without_optional_fields_still_maps(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_mcp(monkeypatch, FakeMcpResult(_orders_payload(status="CONFIRMED")))
+
+    [order] = asyncio.run(_adapter().get_orders())
+
+    assert order.status == "CONFIRMED"
+    assert order.items == []
+
+
+def test_order_without_an_id_is_an_error_not_silence(monkeypatch: pytest.MonkeyPatch) -> None:
+    no_id: dict[str, object] = {"success": True, "data": {"orders": [dict[str, object]()]}}
+    _patch_mcp(monkeypatch, FakeMcpResult(no_id))
+
+    with pytest.raises(CommerceError):
+        asyncio.run(_adapter().get_orders())
+
+
+# ------------------------------------------------- login handling
+def test_expired_token_stops_before_any_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_mcp(monkeypatch, FakeMcpResult(_cart_payload()))
+    backend = FakeKeyring()
+    storage = KeyringTokenStorage(backend)
+    asyncio.run(storage.set_tokens(OAuthToken(access_token="t", expires_in=1)))
+    adapter = SwiggyInstamart(
+        endpoint=SWIGGY_MCP_URL,
+        redirect_uri=OAUTH_REDIRECT_URI,
+        storage=storage,
+        redirect_handler=_no_redirect,
+        callback_handler=_no_callback,
+    )
+
+    with pytest.raises(CommerceAuthRequired):
+        asyncio.run(adapter.get_cart())
+
+    assert calls == []
+
+
+def test_fresh_token_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_mcp(monkeypatch, FakeMcpResult(_cart_payload()))
+    storage = KeyringTokenStorage(FakeKeyring())
+    asyncio.run(storage.set_tokens(OAuthToken(access_token="t", expires_in=432000)))
+    adapter = SwiggyInstamart(
+        endpoint=SWIGGY_MCP_URL,
+        redirect_uri=OAUTH_REDIRECT_URI,
+        storage=storage,
+        redirect_handler=_no_redirect,
+        callback_handler=_no_callback,
+    )
+
+    asyncio.run(adapter.get_cart())
+
+    assert len(calls) == 1
+
+
+def test_server_auth_error_asks_for_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RpcError(Exception):
+        code = -32001
+
+    _patch_mcp(
+        monkeypatch,
+        FakeMcpResult({}),
+        tool_error=RpcError("expired"),
+        tool_error_name="get_cart",
+    )
+
+    with pytest.raises(CommerceAuthRequired):
+        asyncio.run(_adapter().get_cart())
+
+
+# ------------------------------------------------- environment separation
+def test_staging_is_allowed_and_keeps_separate_credentials() -> None:
+    production = KeyringTokenStorage(FakeKeyring())
+    staging = KeyringTokenStorage(FakeKeyring(), endpoint=SWIGGY_STAGING_MCP_URL)
+    assert staging.service_name != production.service_name
+    adapter = SwiggyInstamart(
+        endpoint=SWIGGY_STAGING_MCP_URL,
+        redirect_uri=OAUTH_REDIRECT_URI,
+        storage=staging,
+        redirect_handler=_no_redirect,
+        callback_handler=_no_callback,
+    )
+    assert adapter.endpoint == SWIGGY_STAGING_MCP_URL
+
+
+def test_unknown_endpoint_is_refused() -> None:
+    with pytest.raises(ValueError, match="endpoint"):
+        SwiggyInstamart(
+            endpoint="https://example.test/im",
+            redirect_uri=OAUTH_REDIRECT_URI,
+            storage=KeyringTokenStorage(FakeKeyring()),
+            redirect_handler=_no_redirect,
+            callback_handler=_no_callback,
+        )

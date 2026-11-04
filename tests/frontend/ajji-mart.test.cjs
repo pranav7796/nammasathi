@@ -32,7 +32,9 @@ const selectors = [
   "#error-message", "#reply-audio", "#audio-note", "#cart-items", "#cart-total", "#state-label",
   "#confirm-button", "#confirmation-panel", "#confirmation-items", "#confirmation-total",
   "#confirmation-address", "#confirmation-payment", "#confirm-note", "#back-button",
-  "#new-session-button", "#page-status", "#language-status",
+  "#new-session-button", "#page-status", "#language-status", "#delivery-address", "#address-help",
+  "#commerce-badge", "#commerce-note", "#confirmation-intro", "#cancel-button", "#options-panel",
+  "#options-list", "#order-panel", "#order-result", "#order-ids", "#catalogue-note",
 ];
 const initialCart = [
   { name: "Sona Masoori Rice", pack_size: "1 kg", quantity: 2, unit_price_inr: 78, line_total_inr: 156 },
@@ -40,12 +42,13 @@ const initialCart = [
 function payload(overrides = {}) {
   return {
     session_id: "session-123", language: "kn-IN", state: "READBACK", cart: initialCart,
-    total_inr: 156, cart_version: 4, cart_hash: "fresh-hash", can_confirm: true,
+    total_inr: 156, cart_version: 4, cart_hash: "fresh-hash", can_confirm: true, show_readback: true,
+    commerce_mode: "mock", checkout_enabled: true, options: [], order_ids: [],
     address_label: "Home", payment_method: "COD", assistant_text: "Please check your basket.",
     transcript: null, audio_base64: null, ...overrides,
   };
 }
-function makeApp({ savedSession = null, getPayload = payload(), postPayload = payload(), holdTurn = false } = {}) {
+function makeApp({ savedSession = null, getPayload = payload(), postPayload = payload(), holdTurn = false, actionPayload = payload({ state: "DONE", can_confirm: false, show_readback: false, cart: initialCart }) } = {}) {
   const elements = Object.fromEntries(selectors.map((selector) => [selector, new Element(selector)]));
   const storage = new Map(savedSession ? [["ajji-mart-session", savedSession]] : []);
   const calls = [];
@@ -57,7 +60,8 @@ function makeApp({ savedSession = null, getPayload = payload(), postPayload = pa
     if (url.startsWith("/api/session/turn")) await turnWait;
     let data = getPayload;
     if (url === "/api/sessions") data = postPayload;
-    else if (url === "/api/session/action") data = payload({ state: "DONE", can_confirm: false, cart: initialCart });
+    else if (url === "/api/addresses") data = { commerce_mode: getPayload.commerce_mode, checkout_enabled: true, addresses: [{ id: "home", label: "Home", full_address: "1 Road" }] };
+    else if (url === "/api/session/action") data = actionPayload;
     return { ok: true, status: 200, async json() { return data; } };
   };
   const stream = { getTracks: () => [{ stop() {} }] };
@@ -83,7 +87,10 @@ function makeApp({ savedSession = null, getPayload = payload(), postPayload = pa
       removeItem(key) { storage.delete(key); },
     },
     fetch,
-    Headers: class { constructor() { this.values = {}; } set(key, value) { this.values[key] = value; } },
+    Headers: class {
+      constructor(initial = {}) { this.values = { ...initial }; }
+      set(key, value) { this.values[key] = value; }
+    },
     navigator: { mediaDevices: { async getUserMedia() { return stream; } } },
     window: { AudioContext: AudioContextMock, setTimeout() { return 1; }, clearTimeout() {} },
     URL: { createObjectURL() { return "blob:reply"; }, revokeObjectURL() {} },
@@ -176,4 +183,109 @@ test("finish stops the microphone, shows processing, and blocks duplicate turns"
   app.releaseTurn();
   await tick();
   await tick();
+});
+
+async function recordTurn(app) {
+  await app.elements["#record-button"].click();
+  await tick();
+  app.processors.at(-1).onaudioprocess({
+    inputBuffer: { getChannelData: () => new Float32Array([0.2, 0.1]) },
+    outputBuffer: { getChannelData: () => new Float32Array(2) },
+  });
+  app.elements["#record-button"].click();
+  await tick();
+  await tick();
+  return app.calls.filter((call) => call.url.startsWith("/api/session/turn")).at(-1);
+}
+
+test("a spoken turn tells the server which readback this page received", async () => {
+  const app = makeApp({ savedSession: "session-123" });
+  await tick();
+  const turn = await recordTurn(app);
+  assert.equal(turn.options.headers.values["X-Heard-Cart-Version"], "4");
+  assert.equal(turn.options.headers.values["X-Heard-Cart-Hash"], "fresh-hash");
+});
+
+test("no readback is claimed when the cart cannot be confirmed", async () => {
+  const app = makeApp({ savedSession: "session-123", getPayload: payload({ can_confirm: false }) });
+  await tick();
+  const turn = await recordTurn(app);
+  assert.equal(turn.options.headers.values["X-Heard-Cart-Hash"], undefined);
+  assert.equal(app.elements["#confirm-button"].disabled, true);
+});
+
+test("options are shown as buttons and tapping one sends only its index", async () => {
+  const options = [
+    { name: "Amul Milk", pack_size: "500 ml", quantity: 1, unit_price_inr: 30 },
+    { name: "Nandini Milk", pack_size: "1 ltr", quantity: 2, unit_price_inr: 58 },
+  ];
+  const app = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({ state: "CLARIFYING", options, can_confirm: false, show_readback: false }),
+  });
+  await tick();
+  assert.equal(app.elements["#options-panel"].hidden, false);
+  const buttons = app.elements["#options-list"].children;
+  assert.equal(buttons.length, 2);
+  assert.match(buttons[1].textContent, /2 × Nandini Milk, 1 ltr — ₹58/);
+  await buttons[1].click();
+  const action = app.calls.find((call) => call.url === "/api/session/action");
+  assert.deepEqual(JSON.parse(action.options.body), { action: "select_option", option_index: 1 });
+});
+
+test("a real order never shows demo wording", async () => {
+  const app = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({
+      commerce_mode: "swiggy", state: "DONE", can_confirm: false, show_readback: false,
+      order_ids: ["O123"], order_verified: true, order_status: "PLACED",
+    }),
+  });
+  await tick();
+  assert.equal(app.elements["#order-panel"].hidden, false);
+  assert.match(app.elements["#order-result"].textContent, /PLACED/);
+  assert.match(app.elements["#order-ids"].textContent, /O123/);
+  assert.doesNotMatch(app.elements["#order-result"].textContent, /demo/i);
+  assert.equal(app.elements["#state-label"].textContent, "Order placed");
+  assert.doesNotMatch(app.elements["#catalogue-note"].textContent, /demo/i);
+});
+
+test("a demo order says it was not real", async () => {
+  const app = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({ state: "DONE", can_confirm: false, show_readback: false, order_ids: ["IM1"], order_verified: true }),
+  });
+  await tick();
+  assert.match(app.elements["#order-result"].textContent, /No real order/);
+  assert.equal(app.elements["#state-label"].textContent, "Demo order placed");
+});
+
+test("an unknown order warns against ordering again and offers no confirm", async () => {
+  const app = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({ commerce_mode: "swiggy", state: "ORDER_UNKNOWN", can_confirm: false, show_readback: false }),
+  });
+  await tick();
+  assert.equal(app.elements["#order-panel"].hidden, false);
+  assert.match(app.elements["#order-result"].textContent, /do not order again/);
+  assert.equal(app.elements["#confirm-button"].disabled, true);
+  assert.equal(app.elements["#confirmation-panel"].hidden, true);
+});
+
+test("cancel is available at readback and sends a cancel action", async () => {
+  const app = makeApp({ savedSession: "session-123" });
+  await tick();
+  assert.equal(app.elements["#cancel-button"].disabled, false);
+  await app.elements["#cancel-button"].click();
+  const action = app.calls.find((call) => call.url === "/api/session/action");
+  assert.deepEqual(JSON.parse(action.options.body), { action: "cancel" });
+});
+
+test("a restored page shows the last reply it may have missed", async () => {
+  const app = makeApp({
+    savedSession: "session-123",
+    getPayload: payload({ state: "DONE", can_confirm: false, show_readback: false, last_reply: "Your order is placed." }),
+  });
+  await tick();
+  assert.equal(app.elements["#assistant-text"].textContent, "Your order is placed.");
 });

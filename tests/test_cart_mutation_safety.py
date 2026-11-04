@@ -9,8 +9,10 @@ from app.commerce.mock import MockInstamart
 from app.orchestrator.state_machine import (
     CallStarted,
     CartEntry,
+    Effect,
     ItemsExtracted,
     RequestedItem,
+    Say,
     Session,
     State,
     UserConfirmed,
@@ -36,9 +38,11 @@ class RecordingCommerce(MockInstamart):
         self.events: list[str] = []
         self.update_failure: str | None = None
         self.fail_next_reconciliation = False
+        self.update_attempted = False
 
     async def update_cart(self, address_id: str, items: list[CartLine]) -> Cart:
         self.events.append("update_cart")
+        self.update_attempted = True
         self.update_calls.append((address_id, tuple(items)))
         if self.update_failure == "unavailable":
             self.update_failure = None
@@ -77,7 +81,7 @@ class RecordingCommerce(MockInstamart):
 
     async def get_cart(self) -> Cart:
         self.events.append("get_cart")
-        if self.fail_next_reconciliation:
+        if self.fail_next_reconciliation and self.update_attempted:
             self.fail_next_reconciliation = False
             raise CommerceError("Cart read unavailable")
         return await super().get_cart()
@@ -98,6 +102,10 @@ async def _runner(
 async def _seed(runner: TextTurnRunner, *entries: CartEntry) -> None:
     if entries:
         await runner.dispatch(ItemsExtracted(resolved=tuple(entries)))
+
+
+def _says(effects: list[Effect]) -> list[str]:
+    return [effect.template for effect in effects if isinstance(effect, Say)]
 
 
 def _lines(*entries: CartEntry) -> tuple[CartLine, ...]:
@@ -216,12 +224,12 @@ async def test_quantity_limit_failure_reconciles_and_is_not_reported_as_success(
     adapter.events.clear()
     adapter.update_failure = "max_quantity"
 
-    with pytest.raises(CommerceError, match="Maximum quantity exceeded"):
-        await runner.dispatch(
-            ItemsExtracted(resolved=(replace(RICE, quantity=4),), operation="change_qty")
-        )
+    effects = await runner.dispatch(
+        ItemsExtracted(resolved=(replace(RICE, quantity=4),), operation="change_qty")
+    )
 
-    assert adapter.events == ["update_cart", "get_cart"]
+    assert "commerce_error" in _says(effects)
+    assert adapter.events == ["get_cart", "update_cart", "get_cart"]
     assert [(item.sku_id, item.quantity) for item in runner.session.cart] == [(RICE.sku_id, 1)]
     assert runner.session.confirmed_version is None
 
@@ -252,10 +260,10 @@ async def test_product_disappearing_during_mutation_is_reconciled_and_propagated
     adapter.events.clear()
     adapter.update_failure = "unavailable"
 
-    with pytest.raises(CommerceError, match="Product unavailable"):
-        await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
+    effects = await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
 
-    assert adapter.events == ["update_cart", "get_cart"]
+    assert "commerce_error" in _says(effects)
+    assert adapter.events == ["get_cart", "update_cart", "get_cart"]
     assert [(item.sku_id, item.quantity) for item in runner.session.cart] == [(MILK.sku_id, 1)]
     assert adapter.checkout_calls == 0
 
@@ -267,18 +275,18 @@ async def test_timeout_reconciles_partial_mutation_before_any_later_mutation() -
     adapter.events.clear()
     adapter.update_failure = "timeout_partial"
 
-    with pytest.raises(TimeoutError, match="response timed out"):
-        await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
+    effects = await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
 
-    assert adapter.events == ["update_cart", "get_cart"]
+    assert "commerce_error" in _says(effects)
+    assert adapter.events == ["get_cart", "update_cart", "get_cart"]
     assert len(adapter.update_calls) == 2  # one seed call, one failed call; no automatic retry
     assert [item.sku_id for item in runner.session.cart] == [MILK.sku_id]
 
     adapter.events.clear()
     await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
 
-    assert adapter.events[0] == "update_cart"  # prior reconciliation succeeded before this call
-    assert adapter.events == ["update_cart"]
+    # Prior reconciliation succeeded, so this is the normal read-compare-write.
+    assert adapter.events == ["get_cart", "update_cart"]
     assert [item.sku_id for item in runner.session.cart] == [MILK.sku_id, ATTA.sku_id]
 
 
@@ -287,18 +295,28 @@ async def test_mutation_is_blocked_until_failed_reconciliation_succeeds() -> Non
     runner, adapter = await _runner()
     await _seed(runner, MILK, RICE)
     adapter.events.clear()
+    adapter.update_attempted = False
     adapter.fail_next_reconciliation = True
     adapter.update_failure = "timeout_partial"
 
-    with pytest.raises(TimeoutError, match="response timed out"):
-        await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
+    effects = await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
 
-    assert adapter.events == ["update_cart", "get_cart"]
+    assert "commerce_error" in _says(effects)
+    assert adapter.events == ["get_cart", "update_cart", "get_cart"]
     assert len(adapter.update_calls) == 2
+    assert runner.confirmable is False
 
     await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
 
-    assert adapter.events == ["update_cart", "get_cart", "get_cart", "update_cart"]
+    # Reconcile first, then the normal read-compare-write.
+    assert adapter.events == [
+        "get_cart",
+        "update_cart",
+        "get_cart",
+        "get_cart",
+        "get_cart",
+        "update_cart",
+    ]
     assert len(adapter.update_calls) == 3
     assert [item.sku_id for item in runner.session.cart] == [MILK.sku_id, ATTA.sku_id]
 
@@ -310,10 +328,10 @@ async def test_partial_success_response_is_reconciled_and_reported_as_failure() 
     adapter.events.clear()
     adapter.update_failure = "partial_success"
 
-    with pytest.raises(CommerceError, match="did not match the requested cart"):
-        await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
+    effects = await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
 
-    assert adapter.events == ["update_cart", "get_cart"]
+    assert _says(effects)[0] == "cart_changed", "the user is told the cart is not as requested"
+    assert adapter.events == ["get_cart", "update_cart"]
     assert [item.sku_id for item in runner.session.cart] == [MILK.sku_id]
     assert runner.session.confirmed_version is None
     assert adapter.checkout_calls == 0
@@ -326,12 +344,12 @@ async def test_quantity_mismatch_in_actual_cart_is_reconciled_and_reported() -> 
     adapter.events.clear()
     adapter.update_failure = "quantity_changed"
 
-    with pytest.raises(CommerceError, match="did not match the requested cart"):
-        await runner.dispatch(
-            ItemsExtracted(resolved=(replace(RICE, quantity=3),), operation="change_qty")
-        )
+    effects = await runner.dispatch(
+        ItemsExtracted(resolved=(replace(RICE, quantity=3),), operation="change_qty")
+    )
 
-    assert adapter.events == ["update_cart", "get_cart"]
+    assert _says(effects)[0] == "cart_changed"
+    assert adapter.events == ["get_cart", "update_cart"]
     assert [(item.sku_id, item.quantity) for item in runner.session.cart] == [(RICE.sku_id, 2)]
     assert runner.session.confirmed_version is None
 
@@ -341,11 +359,12 @@ async def test_wrong_address_response_is_reconciled_and_never_authorizes_checkou
     runner, adapter = await _runner()
     adapter.update_failure = "wrong_address"
 
-    with pytest.raises(CommerceError, match="did not match the requested cart"):
-        await runner.dispatch(ItemsExtracted(resolved=(MILK,)))
+    effects = await runner.dispatch(ItemsExtracted(resolved=(ATTA,)))
 
-    assert adapter.events == ["update_cart", "get_cart"]
+    assert "cart_blocked" in _says(effects)
+    assert "address_mismatch" in runner.session.issues
     assert runner.session.address_id == "addr_other"
+    assert runner.confirmable is False
     assert adapter.checkout_calls == 0
 
     await runner.dispatch(UserConfirmed(runner.session.cart_version, runner.session.cart_hash))
@@ -363,7 +382,7 @@ async def test_price_and_total_changes_from_get_cart_are_reflected_before_confir
 
     await runner.dispatch(UserDone())
 
-    assert adapter.events[-1] == "get_cart"
+    assert "get_cart" in adapter.events
     assert runner.session.cart[0].unit_price_inr == 31
     assert runner.session.total_inr == 56
     assert runner.session.confirmed_version is None
@@ -380,7 +399,8 @@ def test_checkout_transition_requires_confirmation_bound_to_cart_address_and_tot
         address_id=HOME,
         cart_version=4,
     )
-    session = replace(session, cart_hash=cart_hash(session.cart, 51, HOME))
+    digest = cart_hash(session.cart, 51, HOME)
+    session = replace(session, cart_hash=digest, readback_version=4, readback_hash=digest)
 
     stale, effects = transition(
         session,

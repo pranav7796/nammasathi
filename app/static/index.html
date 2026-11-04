@@ -67,10 +67,23 @@
             <div class="cart-heading-row"><h2 id="cart-heading">Your basket</h2><span id="state-label" class="state-label">Ready</span></div>
             <ul id="cart-items" class="cart-items"><li class="empty-cart">Your basket is empty. Tell Ajji what you need.</li></ul>
             <p class="cart-total"><span>Total</span><strong id="cart-total">₹0</strong></p>
-            <p class="small-note">Prices and pack sizes are from the demo catalogue.</p>
+            <p id="catalogue-note" class="small-note">Prices and pack sizes are from the demo catalogue.</p>
             <p class="edit-help">To edit or remove an item, tap Speak to Ajji and tell her what to change.</p>
           </section>
         </div>
+
+        <section id="options-panel" class="panel confirmation-panel" aria-labelledby="options-heading" hidden>
+          <p class="eyebrow">Ajji has a question</p>
+          <h2 id="options-heading">Which one should I add?</h2>
+          <p class="confirmation-intro">Tap one, or say first, second, or third.</p>
+          <div id="options-list" class="order-actions"></div>
+        </section>
+
+        <section id="order-panel" class="panel confirmation-panel" aria-labelledby="order-heading" role="status" hidden>
+          <h2 id="order-heading">Your order</h2>
+          <p id="order-result" class="confirmation-intro"></p>
+          <p id="order-ids" class="small-note"></p>
+        </section>
 
         <section id="confirmation-panel" class="panel confirmation-panel" aria-labelledby="confirm-heading" hidden>
           <p class="eyebrow">Please check before ordering</p>
@@ -86,6 +99,7 @@
           <div class="order-actions">
             <button id="confirm-button" class="confirm-button" type="button" disabled>Confirm demo order</button>
             <button id="back-button" class="secondary-button" type="button">Go back and make a change</button>
+            <button id="cancel-button" class="secondary-button" type="button">Cancel this basket</button>
           </div>
         </section>
 

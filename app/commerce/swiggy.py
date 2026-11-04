@@ -13,16 +13,24 @@ https://mcp.swiggy.com/builders/docs/reference/instamart/get_cart.md
 https://mcp.swiggy.com/builders/docs/reference/instamart/update_cart.md
 https://mcp.swiggy.com/builders/docs/reference/instamart/checkout.md
 https://mcp.swiggy.com/builders/docs/reference/instamart/get_orders.md
+https://mcp.swiggy.com/builders/docs/reference/instamart/get_payment_options.md
+https://mcp.swiggy.com/builders/docs/reference/errors.md
+Observed live response details are recorded in docs/swiggy-integration-notes.md.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Protocol, cast
+from uuid import uuid4
 
 import httpx2
 from mcp import ClientSession
@@ -37,23 +45,60 @@ from pydantic import AnyUrl, TypeAdapter
 from app.commerce.base import (
     Address,
     Cart,
+    CartIssue,
     CartItem,
     CartLine,
     CommerceAdapter,
+    CommerceAuthRequired,
     CommerceError,
+    CommerceNotAttempted,
+    CommerceRejected,
+    CommerceWriteDisabled,
     OrderResult,
     OrderSummary,
     OrderSummaryItem,
     OrderTracking,
     PaymentMethod,
+    PaymentOptions,
     Product,
+    RejectionKind,
     SearchResult,
     Variant,
+    classify_rejection,
+    same_address_id,
 )
+from app.commerce.units import parse_pack_size
+from app.observability import log_event
 
 SWIGGY_MCP_URL = "https://mcp.swiggy.com/im"
+# https://mcp.swiggy.com/builders/docs/operate/access.md documents
+# mcp-staging.swiggy.com/{server}; confirm the Instamart path when access is granted.
+SWIGGY_STAGING_MCP_URL = "https://mcp-staging.swiggy.com/im"
+ALLOWED_MCP_URLS = frozenset({SWIGGY_MCP_URL, SWIGGY_STAGING_MCP_URL})
 _ANY_URL = TypeAdapter(AnyUrl)
 OAUTH_REDIRECT_URI = "http://localhost"
+
+# The only tools this adapter may ever call. clear_cart, address mutation, coupons,
+# and UPI confirmation are deliberately absent.
+_READ_TOOLS = frozenset(
+    {
+        "get_addresses",
+        "search_products",
+        "your_go_to_items",
+        "get_cart",
+        "get_payment_options",
+        "get_orders",
+        "track_order",
+    }
+)
+_WRITE_TOOLS = frozenset({"update_cart", "checkout"})
+_TOOL_TIMEOUT_SECONDS = 30.0
+_CHECKOUT_TIMEOUT_SECONDS = 60.0
+_SESSION_IDLE_SECONDS = 120.0
+_TOKEN_EXPIRY_MARGIN_SECONDS = 60.0
+# httpx2's default read timeout is 5 s, far too short for checkout; the SDK's own
+# defaults are 30 s general / 300 s read. Tool calls are bounded by read_timeout_seconds.
+_HTTP_TIMEOUT = httpx2.Timeout(30.0, read=90.0)
 
 
 class SecureCredentialStoreUnavailable(RuntimeError):
@@ -82,11 +127,29 @@ class SwiggyDiagnosticError(CommerceError):
         self.detail = detail
 
 
+class SwiggyRejected(SwiggyDiagnosticError, CommerceRejected):
+    """Swiggy answered and refused. The provider text is classified, never exposed by str()."""
+
+    def __init__(self, *, operation: str, stage: str, kind: RejectionKind) -> None:
+        SwiggyDiagnosticError.__init__(
+            self,
+            operation=operation,
+            stage=stage,
+            error_type="SwiggyRejected",
+            detail=f"Swiggy refused the request ({kind.value})",
+        )
+        self.kind = kind
+
+
 def diagnostic_from_exception(
     operation: str, stage: str, error: Exception
 ) -> SwiggyDiagnosticError:
+    if isinstance(error, SwiggyRejected):
+        return error
     nested = _find_diagnostic_error(error)
     if nested is not None:
+        if isinstance(nested, SwiggyRejected):
+            return nested
         return SwiggyDiagnosticError(
             operation=operation,
             stage=nested.stage,
@@ -128,7 +191,10 @@ def _find_diagnostic_error(error: BaseException) -> SwiggyDiagnosticError | None
 
 
 def _transport_stage(error: Exception, fallback: str) -> str:
-    request = getattr(error, "request", None)
+    try:
+        request = getattr(error, "request", None)
+    except RuntimeError:  # httpx raises when no request is attached to the error
+        return fallback
     url = getattr(request, "url", None)
     path = getattr(url, "path", "")
     if isinstance(path, str) and path.rstrip("/").endswith("/token"):
@@ -168,7 +234,7 @@ class _SwiggyOAuthClientProvider(OAuthClientProvider):
     async def _perform_authorization_code_grant(self) -> tuple[str, str]:
         try:
             return await super()._perform_authorization_code_grant()
-        except SwiggyDiagnosticError:
+        except (SwiggyDiagnosticError, CommerceAuthRequired):
             raise
         except Exception as exc:
             raise diagnostic_from_exception("OAuth", "authorization callback", exc) from exc
@@ -187,7 +253,7 @@ async def run_authorization_callback_safely(
 ) -> AuthorizationCodeResult:
     try:
         return await callback()
-    except SwiggyDiagnosticError:
+    except (SwiggyDiagnosticError, CommerceAuthRequired):
         raise
     except Exception as exc:
         raise diagnostic_from_exception("OAuth", "authorization callback", exc) from exc
@@ -208,8 +274,12 @@ class KeyringTokenStorage:
 
     service_name = "ajji-mart.swiggy-mcp"
 
-    def __init__(self, backend: KeyringBackend | None = None) -> None:
+    def __init__(
+        self, backend: KeyringBackend | None = None, *, endpoint: str = SWIGGY_MCP_URL
+    ) -> None:
         self._backend = backend
+        if endpoint != SWIGGY_MCP_URL:  # never reuse production credentials on another server
+            self.service_name = "ajji-mart.swiggy-mcp.staging"
 
     def _get_backend(self) -> KeyringBackend:
         if self._backend is not None:
@@ -255,6 +325,16 @@ class KeyringTokenStorage:
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
         await self._set("oauth-tokens", tokens.model_dump_json())
+        # The SDK does not restore token expiry from storage; keep it ourselves.
+        lifetime = tokens.expires_in if tokens.expires_in is not None else 0
+        await self._set("oauth-token-expires-at", str(time.time() + lifetime))
+
+    async def token_expires_at(self) -> float | None:
+        raw = await self._get("oauth-token-expires-at")
+        try:
+            return float(raw) if raw else None
+        except ValueError:
+            return None
 
     async def get_client_info(self) -> OAuthClientInformationFull | None:
         raw = await self._get("oauth-client")
@@ -272,8 +352,22 @@ class KeyringTokenStorage:
         await self._set("oauth-client", client_info.model_dump_json())
 
 
+@dataclass
+class _ToolRequest:
+    name: str
+    arguments: dict[str, object]
+    timeout: float
+    future: asyncio.Future[CallToolResult]
+
+
 class SwiggyInstamart(CommerceAdapter):
-    """MCP-backed Instamart adapter with OAuth 2.1 + PKCE."""
+    """MCP-backed Instamart adapter with OAuth 2.1 + PKCE.
+
+    One long-lived MCP session serves all tool calls, as required by
+    https://mcp.swiggy.com/builders/docs/operate/rate-limits.md. Its transport
+    must be entered and exited by a single task, so a worker task owns it and
+    request handlers talk to that worker through a queue.
+    """
 
     def __init__(
         self,
@@ -284,15 +378,24 @@ class SwiggyInstamart(CommerceAdapter):
         redirect_handler: Callable[[str], Awaitable[None]],
         callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]],
         allow_real_checkout: bool = False,
+        allow_cart_writes: bool | None = None,
     ) -> None:
-        if endpoint != SWIGGY_MCP_URL:
+        if endpoint not in ALLOWED_MCP_URLS:
             raise ValueError("Swiggy Instamart endpoint must be https://mcp.swiggy.com/im")
         if redirect_uri != OAUTH_REDIRECT_URI:
             raise ValueError("Local Swiggy OAuth redirect must be http://localhost")
         self.endpoint = endpoint
         self.allow_real_checkout = allow_real_checkout
+        self.allow_cart_writes = (
+            allow_real_checkout if allow_cart_writes is None else (allow_cart_writes)
+        )
+        self._storage = storage
         self._available_payment_methods: set[str] = set()
+        self._cod_id: str | None = None
         self._last_cart_address_id: str | None = None
+        self._queue: asyncio.Queue[_ToolRequest] | None = None
+        self._worker: asyncio.Task[None] | None = None
+        self._worker_loop: asyncio.AbstractEventLoop | None = None
         metadata = OAuthClientMetadata(
             client_name="Ajji Mart",
             redirect_uris=[_ANY_URL.validate_python(redirect_uri)],
@@ -309,16 +412,40 @@ class SwiggyInstamart(CommerceAdapter):
             callback_handler=lambda: run_authorization_callback_safely(callback_handler),
         )
 
+    async def aclose(self) -> None:
+        """Close the MCP session owned by the worker task, if it is running."""
+        worker = self._worker
+        self._worker = None
+        self._queue = None
+        if worker is None or worker.done():
+            return
+        if self._worker_loop is asyncio.get_running_loop():
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
     async def _call(self, name: str, arguments: dict[str, object]) -> Mapping[str, object]:
         data, _ = await self._call_with_message(name, arguments)
         return data
 
-    async def _call_with_message(
-        self, name: str, arguments: dict[str, object]
-    ) -> tuple[Mapping[str, object], str]:
+    def _ensure_worker(self) -> asyncio.Queue[_ToolRequest]:
+        loop = asyncio.get_running_loop()
+        if (
+            self._queue is None
+            or self._worker is None
+            or self._worker.done()
+            or self._worker_loop is not loop
+        ):
+            self._queue = asyncio.Queue()
+            self._worker_loop = loop
+            self._worker = loop.create_task(self._run_session(self._queue))
+        return self._queue
+
+    async def _run_session(self, queue: asyncio.Queue[_ToolRequest]) -> None:
+        """Own one MCP session; any failure fails queued calls and ends this session."""
+        current: _ToolRequest | None = None
         try:
             async with (
-                httpx2.AsyncClient(auth=self._oauth) as client,
+                httpx2.AsyncClient(auth=self._oauth, timeout=_HTTP_TIMEOUT) as client,
                 streamable_http_client(self.endpoint, http_client=client) as (
                     read_stream,
                     write_stream,
@@ -327,58 +454,126 @@ class SwiggyInstamart(CommerceAdapter):
             ):
                 try:
                     await session.initialize()
-                except SwiggyDiagnosticError:
+                except (SwiggyDiagnosticError, CommerceAuthRequired):
                     raise
                 except Exception as exc:
                     raise diagnostic_from_exception(
-                        name, _transport_stage(exc, "MCP initialization"), exc
+                        "MCP session", _transport_stage(exc, "MCP initialization"), exc
                     ) from exc
-                try:
-                    result = await session.call_tool(name, arguments)
-                except httpx2.TimeoutException as exc:
-                    if name == "checkout":
-                        raise TimeoutError(
-                            "Swiggy checkout outcome is unknown; check order status"
-                        ) from exc
-                    raise diagnostic_from_exception(name, f"MCP operation {name}", exc) from exc
-                except SwiggyDiagnosticError:
+                while True:
+                    try:
+                        current = await asyncio.wait_for(queue.get(), _SESSION_IDLE_SECONDS)
+                    except TimeoutError:
+                        return
+                    try:
+                        result = await session.call_tool(
+                            current.name, current.arguments, read_timeout_seconds=current.timeout
+                        )
+                    except Exception as exc:
+                        # The session state is unknown now; report this call and reconnect later.
+                        if not current.future.done():
+                            current.future.set_exception(exc)
+                        current = None
+                        return
+                    if not current.future.done():
+                        current.future.set_result(result)
+                    current = None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._fail_requests(queue, current, exc)
+        finally:
+            # Calls never sent are safe to resend; `_send` does that, except for checkout.
+            self._fail_requests(queue, current, CommerceError("Swiggy session closed"))
+
+    @staticmethod
+    def _fail_requests(
+        queue: asyncio.Queue[_ToolRequest], current: _ToolRequest | None, error: Exception
+    ) -> None:
+        pending = [current] if current is not None else []
+        while not queue.empty():
+            pending.append(queue.get_nowait())
+        for request in pending:
+            if not request.future.done():
+                request.future.set_exception(error)
+
+    async def _check_token_fresh(self) -> None:
+        if not isinstance(self._storage, KeyringTokenStorage):
+            return
+        expires_at = await self._storage.token_expires_at()
+        if expires_at is not None and time.time() >= expires_at - _TOKEN_EXPIRY_MARGIN_SECONDS:
+            raise CommerceAuthRequired(
+                "Swiggy login is missing or expired. Run `uv run python -m app.swiggy_auth`."
+            )
+
+    async def _send(
+        self, name: str, arguments: dict[str, object], timeout: float
+    ) -> CallToolResult:
+        for attempt in (1, 2):
+            # A worker can end between calls (idle timeout, prior failure); that is
+            # not an outcome of this call, because the request was never sent.
+            queue = self._ensure_worker()
+            future: asyncio.Future[CallToolResult] = asyncio.get_running_loop().create_future()
+            queue.put_nowait(_ToolRequest(name, arguments, timeout, future))
+            try:
+                return await future
+            except CommerceError as exc:
+                if str(exc) != "Swiggy session closed" or attempt == 2 or name == "checkout":
                     raise
-                except Exception as exc:
-                    raise diagnostic_from_exception(name, f"MCP operation {name}", exc) from exc
+        raise CommerceError("Swiggy session closed")
+
+    async def _call_with_message(
+        self, name: str, arguments: dict[str, object]
+    ) -> tuple[Mapping[str, object], str]:
+        if name not in _READ_TOOLS and name not in _WRITE_TOOLS:
+            raise CommerceNotAttempted(f"Swiggy tool is not allowed: {name}")
+        await self._check_token_fresh()
+        correlation_id = uuid4().hex
+        started = time.perf_counter()
+        status = "error"
+        timeout = _CHECKOUT_TIMEOUT_SECONDS if name == "checkout" else _TOOL_TIMEOUT_SECONDS
+        try:
+            result = await self._send(name, arguments, timeout)
+            data, message = _parse_result(name, result)
+            status = "ok"
+            return data, message
+        except SwiggyRejected:
+            status = "rejected"
+            raise
         except SwiggyDiagnosticError as exc:
             raise diagnostic_from_exception(name, exc.stage, exc) from exc
-        except httpx2.TimeoutException as exc:
+        except TimeoutError as exc:
+            status = "timeout"
             if name == "checkout":
                 raise TimeoutError(
                     "Swiggy checkout outcome is unknown; check order status"
                 ) from exc
-            raise diagnostic_from_exception(
-                name, _transport_stage(exc, "MCP initialization"), exc
-            ) from exc
+            raise diagnostic_from_exception(name, f"MCP operation {name}", exc) from exc
+        except httpx2.TimeoutException as exc:
+            status = "timeout"
+            if name == "checkout":
+                raise TimeoutError(
+                    "Swiggy checkout outcome is unknown; check order status"
+                ) from exc
+            raise diagnostic_from_exception(name, _operation_stage(exc, name), exc) from exc
         except httpx2.RequestError as exc:
-            raise diagnostic_from_exception(
-                name, _transport_stage(exc, "MCP initialization"), exc
-            ) from exc
-        except TimeoutError:
+            raise diagnostic_from_exception(name, _operation_stage(exc, name), exc) from exc
+        except CommerceError:
             raise
         except Exception as exc:
-            raise diagnostic_from_exception(
-                name, _transport_stage(exc, "MCP initialization"), exc
-            ) from exc
-        if result.is_error:
-            error = CommerceError("Swiggy MCP tool returned an error result")
-            raise diagnostic_from_exception(name, f"MCP operation {name}", error) from error
-        try:
-            payload = _result_mapping(result)
-            if payload.get("success") is False:
-                raise CommerceError(f"Swiggy {name} request was rejected")
-            data = payload.get("data") if "data" in payload else payload
-            if not isinstance(data, Mapping):
-                raise CommerceError(f"Invalid data in Swiggy {name} response")
-        except Exception as exc:
-            raise diagnostic_from_exception(name, f"MCP operation {name} response", exc) from exc
-        message = _optional_str(payload.get("message")) or ""
-        return cast(Mapping[str, object], data), message
+            if _requires_login(exc):
+                raise CommerceAuthRequired(
+                    "Swiggy login is missing or expired. Run `uv run python -m app.swiggy_auth`."
+                ) from exc
+            raise diagnostic_from_exception(name, _operation_stage(exc, name), exc) from exc
+        finally:
+            log_event(
+                "mcp_tool_call",
+                tool=name,
+                correlation_id=correlation_id,
+                status=status,
+                duration_ms=round((time.perf_counter() - started) * 1000),
+            )
 
     async def get_addresses(self) -> list[Address]:
         addresses: list[Address] = []
@@ -431,6 +626,8 @@ class SwiggyInstamart(CommerceAdapter):
         return _products(data.get("products"))
 
     async def update_cart(self, address_id: str, items: list[CartLine]) -> Cart:
+        if not self.allow_cart_writes:
+            raise CommerceWriteDisabled("Changing the real Swiggy cart is disabled")
         data = await self._call(
             "update_cart",
             {
@@ -442,16 +639,37 @@ class SwiggyInstamart(CommerceAdapter):
             },
         )
         cart = _cart(data)
-        self._available_payment_methods = _payment_method_names(data)
+        self._remember_payment_methods(data)
         self._last_cart_address_id = cart.address_id or address_id
         return cart
 
     async def get_cart(self) -> Cart:
         data = await self._call("get_cart", {})
-        self._available_payment_methods = _payment_method_names(data)
+        self._remember_payment_methods(data)
         cart = _cart(data)
         self._last_cart_address_id = cart.address_id
         return cart
+
+    def _remember_payment_methods(self, data: Mapping[str, object]) -> None:
+        names = _payment_method_names(data)
+        if names:
+            self._available_payment_methods = names
+
+    async def get_payment_options(self) -> PaymentOptions:
+        """Live cash-on-delivery availability; live get_cart omits availablePaymentMethods."""
+        data = await self._call("get_payment_options", {})
+        raw = data.get("cod")
+        cod: Mapping[str, object] = (
+            cast(Mapping[str, object], raw) if isinstance(raw, Mapping) else {}
+        )
+        available = cod.get("available") is True
+        cod_id = _optional_str(cod.get("id"))
+        self._cod_id = cod_id
+        if available:
+            self._available_payment_methods = {*self._available_payment_methods, cod_id or "COD"}
+        else:
+            self._available_payment_methods -= {"COD", "Cash", cod_id or "COD"}
+        return PaymentOptions(cod_available=available, cod_id=cod_id)
 
     async def checkout(
         self,
@@ -460,31 +678,25 @@ class SwiggyInstamart(CommerceAdapter):
         confirm_duplicate: bool = False,
     ) -> OrderResult:
         if not self.allow_real_checkout:
-            raise CommerceError("Real Swiggy checkout is disabled by configuration")
+            raise CommerceNotAttempted("Real Swiggy checkout is disabled by configuration")
         if confirm_duplicate:
-            raise CommerceError("Duplicate checkout requires a separate confirmed recovery flow")
-        if address_id != self._last_cart_address_id:
-            raise CommerceError(
+            raise CommerceNotAttempted(
+                "Duplicate checkout requires a separate confirmed recovery flow"
+            )
+        if payment_method is not PaymentMethod.COD:
+            raise CommerceNotAttempted("Ajji only places cash-on-delivery orders")
+        if not same_address_id(address_id, self._last_cart_address_id):
+            raise CommerceNotAttempted(
                 "Refresh the cart for the selected delivery address before checkout"
             )
-        selected_method = "Cash" if payment_method is PaymentMethod.COD else payment_method.value
-        if not _payment_method_is_available(selected_method, self._available_payment_methods):
-            raise CommerceError("The selected payment method is not available for the current cart")
+        selected_method = self._cod_id if self._cod_id in {"COD", "Cash"} else "Cash"
+        if not _payment_method_is_available("Cash", self._available_payment_methods):
+            raise CommerceNotAttempted(
+                "The selected payment method is not available for the current cart"
+            )
         arguments: dict[str, object] = {"addressId": address_id, "paymentMethod": selected_method}
-        data, message = await self._call_with_message(
-            "checkout",
-            arguments,
-        )
-        direct_order_id = data.get("orderId")
-        if isinstance(direct_order_id, str):
-            return OrderResult(success=True, order_ids=[direct_order_id], message=message)
-        orders = _list(data.get("orders"), "orders", allow_missing=True)
-        order_ids = [
-            value for value in (_optional_str(item.get("orderId")) for item in orders) if value
-        ]
-        all_succeeded = data.get("allSucceeded")
-        success = bool(all_succeeded) if isinstance(all_succeeded, bool) else bool(order_ids)
-        return OrderResult(success=success, order_ids=order_ids, message=message)
+        data, message = await self._call_with_message("checkout", arguments)
+        return _order_result(data, message)
 
     async def get_orders(self, count: int = 10) -> list[OrderSummary]:
         if not 1 <= count <= 20:
@@ -501,6 +713,102 @@ class SwiggyInstamart(CommerceAdapter):
             eta_text=_optional_str(status.get("etaText")),
             eta_minutes=_optional_int(status.get("etaMinutes")),
         )
+
+
+def _operation_stage(error: Exception, name: str) -> str:
+    return _transport_stage(error, f"MCP operation {name}")
+
+
+def _requires_login(error: BaseException) -> bool:
+    """Find a login failure inside SDK exception groups or JSON-RPC errors (-32001)."""
+    if isinstance(error, CommerceAuthRequired):
+        return True
+    if isinstance(error, BaseExceptionGroup):
+        group = cast(BaseExceptionGroup[BaseException], error)
+        return any(_requires_login(nested) for nested in group.exceptions)
+    details = getattr(error, "error", None)
+    code = getattr(details, "code", getattr(error, "code", None))
+    return code == -32001
+
+
+def _provider_error_text(payload: Mapping[str, object]) -> str:
+    error = payload.get("error")
+    if isinstance(error, Mapping):
+        message = cast(Mapping[str, object], error).get("message")
+        if isinstance(message, str):
+            return message
+    if isinstance(error, str):
+        return error
+    message = payload.get("message")
+    return message if isinstance(message, str) else ""
+
+
+def _raise_provider_failure(name: str, stage: str, text: str) -> None:
+    kind = classify_rejection(text) if text else None
+    log_event("provider_failure", tool=name, kind=kind.value if kind else "unclassified")
+    if kind is not None:
+        raise SwiggyRejected(operation=name, stage=stage, kind=kind)
+    cause = CommerceError("Swiggy MCP tool returned an error result")
+    raise diagnostic_from_exception(name, stage, cause) from cause
+
+
+def _parse_result(name: str, result: CallToolResult) -> tuple[Mapping[str, object], str]:
+    """Apply the documented envelope; failures keep only a classified kind, not provider text."""
+    if result.is_error:
+        text = ""
+        try:
+            text = _provider_error_text(_result_mapping(result))
+        except CommerceError:
+            for content in result.content:
+                if isinstance(content, TextContent):
+                    text = content.text
+                    break
+        _raise_provider_failure(name, f"MCP operation {name}", text)
+    response_stage = f"MCP operation {name} response"
+    try:
+        payload = _result_mapping(result)
+    except Exception as exc:
+        raise diagnostic_from_exception(name, response_stage, exc) from exc
+    if payload.get("success") is False:
+        _raise_provider_failure(name, response_stage, _provider_error_text(payload))
+    data = payload.get("data") if "data" in payload else payload
+    if not isinstance(data, Mapping):
+        cause = CommerceError(f"Invalid data in Swiggy {name} response")
+        raise diagnostic_from_exception(name, response_stage, cause) from cause
+    message = _optional_str(payload.get("message")) or ""
+    return cast(Mapping[str, object], data), message
+
+
+def _order_result(data: Mapping[str, object], message: str) -> OrderResult:
+    """Map the three documented checkout shapes without losing placed order IDs."""
+    status = _optional_str(data.get("status")) or ""
+    total = _optional_money(data.get("cartTotal"))
+    direct_order_id = data.get("orderId")
+    if isinstance(direct_order_id, str) and direct_order_id:
+        return OrderResult(
+            success=status.upper() != "PENDING_PAYMENT",
+            order_ids=[direct_order_id],
+            message=message,
+            status=status,
+            total_inr=total,
+        )
+    orders = _list(data.get("orders"), "orders", allow_missing=True)
+    order_ids = [
+        value for value in (_optional_str(item.get("orderId")) for item in orders) if value
+    ]
+    all_succeeded = data.get("allSucceeded")
+    if isinstance(all_succeeded, bool):
+        success = all_succeeded and bool(order_ids)
+    else:
+        success = bool(order_ids) and not any(item.get("error") for item in orders)
+    return OrderResult(
+        success=success,
+        partial=bool(order_ids) and not success,
+        order_ids=order_ids,
+        message=message,
+        status=status,
+        total_inr=total,
+    )
 
 
 def _result_mapping(result: CallToolResult) -> Mapping[str, object]:
@@ -564,44 +872,146 @@ def _number(value: object, label: str) -> int:
     raise CommerceError(f"Missing numeric {label} in Swiggy response")
 
 
+def _optional_money(value: object) -> Decimal | None:
+    """Exact rupees and paise from a number or a display string like "₹1,234.50"."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return Decimal(value)
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, str):
+        match = re.search(r"\d+(?:\.\d+)?", value.replace(",", ""))
+        if match:
+            try:
+                return Decimal(match.group(0))
+            except InvalidOperation:
+                return None
+    return None
+
+
+def _money(value: object, label: str) -> Decimal:
+    amount = _optional_money(value)
+    if amount is None:
+        raise CommerceError(f"Missing numeric {label} in Swiggy response")
+    return amount
+
+
 def _products(value: object, *, allow_missing: bool = False) -> list[Product]:
     return [_product(raw) for raw in _list(value, "products", allow_missing=allow_missing)]
 
 
+def _variant(variation: Mapping[str, object]) -> Variant:
+    # Live data: displayName repeats the product name; quantityDescription holds
+    # the pack ("500 ml", "1 ltr", "500 ml x 4"). A pack we cannot parse stays None
+    # so resolution must ask the user instead of treating it as a match.
+    description = _optional_str(variation.get("quantityDescription")) or ""
+    label = description or str(variation.get("displayName") or "")
+    amount = parse_pack_size(description) if description else None
+    return Variant(
+        spin_id=_required_str(variation, "spinId"),
+        sku_id=_required_str(variation, "skuId"),
+        pack_size=label,
+        quantity_value=float(amount.value) if amount else None,
+        unit=amount.measure if amount else None,
+        price_inr=_money(
+            _mapping(variation.get("price"), "price").get("offerPrice"),
+            "offerPrice",
+        ),
+        in_stock=variation.get("isInStockAndAvailable") is True,
+        max_quantity=_optional_int(variation.get("maxQuantity")),
+    )
+
+
 def _product(raw: Mapping[str, object]) -> Product:
-    variations = _list(raw.get("variations"), "variations")
     return Product(
         id=_required_str(raw, "productId"),
         display_name=_required_str(raw, "displayName"),
         brand=str(raw.get("brand") or ""),
-        variants=[
-            Variant(
-                spin_id=_required_str(variation, "spinId"),
-                sku_id=_required_str(variation, "skuId"),
-                pack_size=str(
-                    variation.get("displayName") or variation.get("quantityDescription") or ""
-                ),
-                price_inr=_number(
-                    _mapping(variation.get("price"), "price").get("offerPrice"),
-                    "offerPrice",
-                ),
-                in_stock=bool(variation.get("isInStockAndAvailable")),
-            )
-            for variation in variations
-        ],
+        variants=[_variant(variation) for variation in _list(raw.get("variations"), "variations")],
+        promoted=raw.get("isPromoted") is True,
     )
 
 
+def _item_total_from_bill(breakdown: Mapping[str, object]) -> Decimal | None:
+    for line in _list(breakdown.get("lineItems"), "lineItems", allow_missing=True):
+        if str(line.get("label") or "").casefold() == "item total":
+            return _optional_money(line.get("value"))
+    return None
+
+
+def _unit_prices(
+    raw_items: list[Mapping[str, object]], billed_item_total: Decimal | None
+) -> list[Decimal]:
+    """The docs do not say if discountedFinalPrice is per unit, so check it against the bill."""
+    finals = [
+        _money(item.get("discountedFinalPrice"), "discountedFinalPrice") for item in raw_items
+    ]
+    quantities = [_number(item.get("quantity"), "quantity") for item in raw_items]
+    per_unit_total = sum(
+        (price * qty for price, qty in zip(finals, quantities, strict=True)), Decimal(0)
+    )
+    if (
+        billed_item_total is not None
+        and per_unit_total != billed_item_total
+        and sum(finals, Decimal(0)) == billed_item_total
+    ):
+        return [price / qty for price, qty in zip(finals, quantities, strict=True)]
+    return finals
+
+
+def _cart_issues(
+    data: Mapping[str, object], raw_items: list[Mapping[str, object]]
+) -> tuple[list[CartIssue], list[str]]:
+    issues: list[CartIssue] = []
+    errors: list[str] = []
+
+    def record(issue: CartIssue, text: str) -> None:
+        if issue not in issues:
+            issues.append(issue)
+        errors.append(text)
+
+    if data.get("unserviceableItems"):
+        record(CartIssue.NOT_SERVICEABLE, "Some cart items are not serviceable at this address")
+    if any(item.get("isInStockAndAvailable") is False for item in raw_items):
+        record(CartIssue.OUT_OF_STOCK, "Some cart items are out of stock")
+    warning = _optional_str(data.get("addressWarning"))
+    if warning:
+        record(CartIssue.OTHER, warning)
+    cart_warning = _mapping_text(data.get("cartWarning"), "") if data.get("cartWarning") else ""
+    if cart_warning:
+        kind = classify_rejection(cart_warning)
+        if kind is RejectionKind.MIN_ORDER:
+            record(CartIssue.MIN_ORDER, cart_warning)
+        elif kind is RejectionKind.NOT_SERVICEABLE:
+            record(CartIssue.NOT_SERVICEABLE, cart_warning)
+        elif kind is RejectionKind.OUT_OF_STOCK:
+            record(CartIssue.OUT_OF_STOCK, cart_warning)
+        else:
+            record(CartIssue.OTHER, cart_warning)
+    gpo_error = _optional_str(data.get("gpoError"))
+    if gpo_error:
+        errors.append(gpo_error)  # payment-options fetch trouble; checked via get_payment_options
+    return issues, errors
+
+
 def _cart(data: Mapping[str, object]) -> Cart:
-    raw_items = _list(data.get("items"), "items")
+    absent = data.get("cartAbsent") is True
+    raw_items = _list(data.get("items"), "items", allow_missing=absent)
     details = data.get("selectedAddressDetails")
     address_details: Mapping[str, object] = (
         _mapping(details, "selectedAddressDetails") if details is not None else {}
     )
     address_id = _optional_str(address_details.get("id"))
-    breakdown = _mapping(data.get("billBreakdown"), "billBreakdown")
-    payable = _mapping(breakdown.get("toPay"), "billBreakdown.toPay")
-    total = _number(payable.get("value"), "billBreakdown.toPay.value")
+    if not raw_items and "billBreakdown" not in data:
+        # An empty cart has nothing to bill; the shape of a populated cart stays strict.
+        breakdown: Mapping[str, object] = {}
+        total = Decimal(0)
+    else:
+        breakdown = _mapping(data.get("billBreakdown"), "billBreakdown")
+        payable = _mapping(breakdown.get("toPay"), "billBreakdown.toPay")
+        total = _money(payable.get("value"), "billBreakdown.toPay.value")
+    prices = _unit_prices(raw_items, _item_total_from_bill(breakdown))
     items = [
         CartItem(
             spin_id=_required_str(item, "spinId"),
@@ -609,11 +1019,11 @@ def _cart(data: Mapping[str, object]) -> Cart:
             name=_required_str(item, "itemName"),
             pack_size=str(item.get("itemVariant") or ""),
             quantity=_number(item.get("quantity"), "quantity"),
-            unit_price_inr=_number(item.get("discountedFinalPrice"), "discountedFinalPrice"),
+            unit_price_inr=price,
         )
-        for item in raw_items
+        for item, price in zip(raw_items, prices, strict=True)
     ]
-    item_total = sum(item.quantity * item.unit_price_inr for item in items)
+    item_total = sum((item.line_total_inr for item in items), Decimal(0))
     payment_names = _payment_method_names(data)
     payments = [
         method
@@ -630,17 +1040,8 @@ def _cart(data: Mapping[str, object]) -> Cart:
         _optional_str(address_details.get("area")),
     ]
     address_text = ", ".join(part for part in address_parts if part)
-    errors = [
-        value
-        for value in (
-            _optional_str(data.get("gpoError")),
-            _optional_str(data.get("addressWarning")),
-            _mapping_text(data.get("cartWarning"), "") if data.get("cartWarning") else None,
-        )
-        if value
-    ]
-    if data.get("unserviceableItems"):
-        errors.append("Some cart items are not serviceable at this address")
+    issues, errors = _cart_issues(data, raw_items)
+    stores = {item.get("storeId") for item in raw_items if item.get("storeId") is not None}
     return Cart(
         address_id=address_id,
         delivery_label=str(
@@ -652,30 +1053,45 @@ def _cart(data: Mapping[str, object]) -> Cart:
         delivery_address=address_text or None,
         items=items,
         item_total_inr=item_total,
-        delivery_fee_inr=max(total - item_total, 0),
+        delivery_fee_inr=max(total - item_total, Decimal(0)),
         grand_total_inr=total,
         payment_methods=payments,
         errors=errors,
+        issues=issues,
+        store_count=max(len(stores), 1),
+        lat=_optional_float(address_details.get("lat")),
+        lng=_optional_float(address_details.get("lng")),
     )
+
+
+def _optional_float(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
 
 
 def _order_summary(raw: Mapping[str, object]) -> OrderSummary:
     created = raw.get("createdAt")
-    created_at = datetime.fromisoformat(created) if isinstance(created, str) else None
-    items = _list(raw.get("items"), "items")
+    created_at: datetime | None = None
+    if isinstance(created, str):
+        try:
+            created_at = datetime.fromisoformat(created)
+        except ValueError:
+            created_at = None  # not relied on: reconciliation compares order IDs
+    items = _list(raw.get("items"), "items", allow_missing=True)
     return OrderSummary(
         order_id=_required_str(raw, "orderId"),
         created_at=created_at,
         items=[
             OrderSummaryItem(
-                name=_required_str(item, "name"),
-                quantity=_number(item.get("quantity"), "quantity"),
+                name=str(item.get("name") or ""),
+                quantity=_optional_int(item.get("quantity")) or 0,
                 item_id=_optional_str(item.get("itemId")),
             )
             for item in items
         ],
-        total_inr=_number(raw.get("totalAmount"), "totalAmount"),
-        status=_required_str(raw, "currentStatus"),
+        total_inr=_optional_money(raw.get("totalAmount")) or Decimal(0),
+        status=_optional_str(raw.get("currentStatus")) or _optional_str(raw.get("status")) or "",
         delivery_address_id=(
             _optional_str(_mapping(raw.get("deliveryAddress"), "deliveryAddress").get("id"))
             if raw.get("deliveryAddress")

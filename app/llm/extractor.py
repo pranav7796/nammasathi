@@ -9,6 +9,7 @@ import random
 import re
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 import httpx
@@ -66,6 +67,8 @@ class GroceryItem(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     quantity: float = Field(gt=0, le=1000)
     unit: str | None = Field(default=None, max_length=20)
+    # Common English grocery term for catalogue search; never a product ID or brand guess.
+    search_term: str | None = Field(default=None, max_length=120)
 
 
 class GroceryIntent(BaseModel):
@@ -77,6 +80,16 @@ class GroceryIntent(BaseModel):
     items: list[GroceryItem]
     needs_clarification: bool = False
     clarification_question: str | None = Field(default=None, max_length=240)
+    # 1-based choice among options the application read out; validated by the state machine.
+    option_number: int | None = Field(default=None, ge=1, le=10)
+
+
+@dataclass(frozen=True)
+class ClarificationContext:
+    """The question the user is answering. Holds catalogue names only, no personal data."""
+
+    item: str
+    options: tuple[str, ...]
 
 
 class _GeminiResponse(Protocol):
@@ -85,6 +98,7 @@ class _GeminiResponse(Protocol):
 
 
 _ALLOWED_INTENTS = {
+    "select_option",
     "add_items",
     "remove_items",
     "change_quantity",
@@ -111,12 +125,14 @@ _GEMINI_RESPONSE_SCHEMA = {
                     "name": {"type": "STRING"},
                     "quantity": {"type": "NUMBER"},
                     "unit": {"type": "STRING", "nullable": True},
+                    "search_term": {"type": "STRING", "nullable": True},
                 },
                 "required": ["name", "quantity", "unit"],
             },
         },
         "needs_clarification": {"type": "BOOLEAN"},
         "clarification_question": {"type": "STRING", "nullable": True},
+        "option_number": {"type": "INTEGER", "nullable": True},
     },
     "required": ["intent", "items", "needs_clarification", "clarification_question"],
 }
@@ -133,15 +149,23 @@ _GROQ_RESPONSE_SCHEMA = {
                     "name": {"type": "string"},
                     "quantity": {"type": "number"},
                     "unit": {"type": ["string", "null"]},
+                    "search_term": {"type": ["string", "null"]},
                 },
-                "required": ["name", "quantity", "unit"],
+                "required": ["name", "quantity", "unit", "search_term"],
                 "additionalProperties": False,
             },
         },
         "needs_clarification": {"type": "boolean"},
         "clarification_question": {"type": ["string", "null"]},
+        "option_number": {"type": ["integer", "null"]},
     },
-    "required": ["intent", "items", "needs_clarification", "clarification_question"],
+    "required": [
+        "intent",
+        "items",
+        "needs_clarification",
+        "clarification_question",
+        "option_number",
+    ],
     "additionalProperties": False,
 }
 
@@ -177,7 +201,8 @@ class GeminiIntentExtractor:
         self.selected_provider: str | None = None
 
     @classmethod
-    def from_env(cls) -> GeminiIntentExtractor:
+    def from_env(cls, *, allow_logged_fallback: bool = True) -> GeminiIntentExtractor:
+        """`allow_logged_fallback=False` drops OpenRouter, whose free model may log requests."""
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise IntentExtractionError(
@@ -222,7 +247,11 @@ class GeminiIntentExtractor:
             max_fallback_models=max_fallback_models,
             groq_api_key=os.environ.get("GROQ_API_KEY", "").strip() or None,
             groq_model=groq_model,
-            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", "").strip() or None,
+            openrouter_api_key=(
+                (os.environ.get("OPENROUTER_API_KEY", "").strip() or None)
+                if allow_logged_fallback
+                else None
+            ),
             openrouter_model=openrouter_model,
             timeout_seconds=timeout_seconds,
         )
@@ -255,13 +284,20 @@ class GeminiIntentExtractor:
         logger.info("Gemini model discovery completed candidates=%d", len(self._candidates))
         return self._candidates
 
-    def extract(self, text: str, *, language: str = "kn-IN") -> GroceryIntent:
+    def extract(
+        self,
+        text: str,
+        *,
+        language: str = "kn-IN",
+        context: ClarificationContext | None = None,
+    ) -> GroceryIntent:
         if language not in {"kn-IN", "hi-IN", "en-IN"}:
             raise IntentExtractionError("Language must be kn-IN, hi-IN, or en-IN")
         self.selected_provider = None
         self.selected_model = None
         if not text.strip():
             raise IntentExtractionError("The user utterance is empty")
+        text = _with_context(text, context)
         candidates = [name for name in self._candidates if name not in self._incompatible_models][
             : self.max_fallback_models + 1
         ]
@@ -816,6 +852,19 @@ def _parse_response(response: _GeminiResponse) -> GroceryIntent:
     return GroceryIntent.model_validate_json(response.text)
 
 
+def _with_context(text: str, context: ClarificationContext | None) -> str:
+    if context is None or not context.options:
+        return text
+    numbered = "; ".join(
+        f"{number}. {option}" for number, option in enumerate(context.options, start=1)
+    )
+    return (
+        f"{text}\n\nThe user is answering this question about {context.item!r}. Options: "
+        f"{numbered}. If they pick one, by position, brand, or size, use intent select_option "
+        "with its option_number. Never pick an option they did not clearly describe."
+    )
+
+
 def _prompt(text: str, language: str) -> str:
     response_language = {"kn-IN": "Kannada", "hi-IN": "Hindi", "en-IN": "English"}[language]
     return (
@@ -823,9 +872,13 @@ def _prompt(text: str, language: str) -> str:
         "Do not invent quantities, units, products, prices, variants, addresses, totals, or "
         "order authorization. For an ambiguous request, set needs_clarification=true and ask "
         f"one concise clarification_question in {response_language}. The JSON schema and intent "
-        "values remain identical for every language. Do not write a conversational reply or "
-        "translate product names. Supported intents are add_items, remove_items, "
-        "change_quantity, reorder_usual, done, confirm, reject, cancel, and unclear. "
+        "values remain identical for every language. Do not write a conversational reply. "
+        "For each item, name is what the user said and search_term is the common English "
+        "grocery word for it, translated or transliterated if needed (for example ಹಾಲು, haalu, "
+        "or दूध become milk; akki or चावल become rice). Keep a brand in search_term only if the "
+        "user said one. Put a spoken pack count in unit as packet (for example three packets). "
+        "Supported intents are add_items, remove_items, change_quantity, reorder_usual, done, "
+        "confirm, reject, cancel, select_option, and unclear. "
         "For remove_items include the item with quantity 1 when no quantity is given.\n\n"
         f"User text: {text}"
     )

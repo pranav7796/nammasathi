@@ -1,5 +1,9 @@
 import pytest
 
+from app.commerce.mock import MockInstamart
+from app.commerce.order_journal import FileOrderJournal, InMemoryOrderJournal
+from app.commerce.runtime import checkout_policy, commerce_adapter, order_journal
+from app.commerce.swiggy import SwiggyInstamart
 from app.config import ConfigurationError, load_settings
 
 
@@ -89,3 +93,94 @@ def test_groq_fallback_settings_are_optional_with_default_model() -> None:
 def test_groq_model_cannot_be_empty() -> None:
     with pytest.raises(ConfigurationError, match="GROQ_MODEL"):
         load_settings({"GROQ_MODEL": "  "})
+
+
+REAL_ORDER = {
+    "COMMERCE_BACKEND": "swiggy",
+    "SWIGGY_LIVE_ACCESS": "true",
+    "ALLOW_SWIGGY_CART_WRITES": "true",
+    "ALLOW_REAL_CHECKOUT": "true",
+    "MAX_REAL_ORDER_INR": "500",
+}
+
+
+def test_live_reads_do_not_imply_cart_writes() -> None:
+    settings = load_settings({"COMMERCE_BACKEND": "swiggy", "SWIGGY_LIVE_ACCESS": "true"})
+    assert settings.allow_swiggy_cart_writes is False
+    assert settings.allow_real_checkout is False
+
+
+def test_cart_writes_require_live_access() -> None:
+    with pytest.raises(ConfigurationError, match="SWIGGY_LIVE_ACCESS"):
+        load_settings({"COMMERCE_BACKEND": "swiggy", "ALLOW_SWIGGY_CART_WRITES": "true"})
+    with pytest.raises(ConfigurationError):
+        load_settings({"ALLOW_SWIGGY_CART_WRITES": "true"})
+
+
+@pytest.mark.parametrize("missing", ["ALLOW_SWIGGY_CART_WRITES", "MAX_REAL_ORDER_INR"])
+def test_real_checkout_needs_every_explicit_switch(missing: str) -> None:
+    values = {key: value for key, value in REAL_ORDER.items() if key != missing}
+    with pytest.raises(ConfigurationError, match="ALLOW_REAL_CHECKOUT"):
+        load_settings(values)
+
+
+@pytest.mark.parametrize("amount", ["0", "-5", "abc", "NaN", "Infinity"])
+def test_money_limit_must_be_a_positive_number(amount: str) -> None:
+    with pytest.raises(ConfigurationError, match="MAX_REAL_ORDER_INR"):
+        load_settings({**REAL_ORDER, "MAX_REAL_ORDER_INR": amount})
+
+
+def test_fully_specified_real_checkout_loads_with_one_order_limit() -> None:
+    settings = load_settings(REAL_ORDER)
+    assert settings.allow_real_checkout is True
+    assert settings.real_order_limit == 1
+    assert settings.max_real_order_inr == 500
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "two"])
+def test_order_limit_must_be_positive(value: str) -> None:
+    with pytest.raises(ConfigurationError, match="REAL_ORDER_LIMIT"):
+        load_settings({"REAL_ORDER_LIMIT": value})
+
+
+def test_staging_endpoint_is_accepted() -> None:
+    settings = load_settings(
+        {"COMMERCE_BACKEND": "swiggy", "SWIGGY_MCP_URL": "https://mcp-staging.swiggy.com/im"}
+    )
+    assert settings.swiggy_mcp_url == "https://mcp-staging.swiggy.com/im"
+
+
+def test_flags_reject_anything_but_true_or_false() -> None:
+    with pytest.raises(ConfigurationError):
+        load_settings({"ALLOW_SWIGGY_CART_WRITES": "yes"})
+
+
+def test_mock_mode_never_builds_a_swiggy_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("mock mode constructed a real client")
+
+    monkeypatch.setattr("app.commerce.runtime.SwiggyInstamart", forbidden)
+    monkeypatch.setattr("app.commerce.runtime.KeyringTokenStorage", forbidden)
+
+    adapter = commerce_adapter(load_settings({}))
+
+    assert isinstance(adapter, MockInstamart)
+    assert isinstance(order_journal(load_settings({})), InMemoryOrderJournal)
+
+
+def test_real_mode_policy_carries_limits_and_real_delays() -> None:
+    settings = load_settings(REAL_ORDER)
+    policy = checkout_policy(settings)
+    assert policy.max_orders == 1
+    assert policy.max_total_inr == 500
+    assert sum(policy.reconcile_delays) <= 30
+    assert policy.reconcile_delays[0] >= 2
+    assert isinstance(order_journal(settings), FileOrderJournal)
+
+
+def test_real_adapter_receives_each_switch_separately() -> None:
+    read_only = load_settings({"COMMERCE_BACKEND": "swiggy", "SWIGGY_LIVE_ACCESS": "true"})
+    adapter = commerce_adapter(read_only)
+    assert isinstance(adapter, SwiggyInstamart)
+    assert adapter.allow_cart_writes is False
+    assert adapter.allow_real_checkout is False

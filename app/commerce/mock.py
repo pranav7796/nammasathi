@@ -8,22 +8,28 @@ detection (honours `confirm_duplicate`), plus failure injection.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from app.commerce.base import (
     Address,
     Cart,
+    CartIssue,
     CartItem,
     CartLine,
     CommerceError,
+    CommerceRejected,
     OrderResult,
     OrderSummary,
     OrderSummaryItem,
     OrderTracking,
     PaymentMethod,
+    PaymentOptions,
     Product,
+    RejectionKind,
     SearchResult,
     Variant,
 )
+from app.commerce.vocabulary import catalogue_term
 
 MIN_ORDER_INR = 99
 DELIVERY_FEE_INR = 25
@@ -37,7 +43,7 @@ def _v(spin: str, size: str, qty: float, unit: str, price: int, stock: bool = Tr
         pack_size=size,
         quantity_value=qty,
         unit=unit,
-        price_inr=price,
+        price_inr=Decimal(price),
         in_stock=stock,
     )
 
@@ -129,25 +135,6 @@ CATALOG: list[Product] = [
     _p("p_jaggery", "Jaggery", "24 Mantra", _v("jaggery_1kg", "1 kg", 1000, "g", 90)),
 ]
 
-_SYNONYMS: dict[str, str] = {
-    "haalu": "milk",
-    "doodh": "milk",
-    "ಹಾಲು": "milk",
-    "akki": "rice",
-    "chawal": "rice",
-    "ಅಕ್ಕಿ": "rice",
-    "eerulli": "onion",
-    "pyaaz": "onion",
-    "ಈರುಳ್ಳಿ": "onion",
-    "sakkare": "sugar",
-    "cheeni": "sugar",
-    "ಸಕ್ಕರೆ": "sugar",
-    "kottambari": "coriander",
-    "dhaniya": "coriander",
-    "bele": "dal",
-    "daal": "dal",
-}
-
 
 class MockInstamart:
     """Implements CommerceAdapter. Single-user, in-memory."""
@@ -172,6 +159,7 @@ class MockInstamart:
         self.fail_next_checkout_after_success = False  # order placed, then raise TimeoutError
         self.fail_next_checkout_before = False  # raise TimeoutError, nothing placed
         self.unserviceable_address_ids: set[str] = set()
+        self.cod_available = True
 
     # helpers
     def _clock(self) -> datetime:
@@ -188,14 +176,16 @@ class MockInstamart:
         if address_id not in {a.id for a in self.addresses}:
             raise CommerceError(f"Invalid addressId: {address_id}")
         if address_id in self.unserviceable_address_ids:
-            raise CommerceError("Address not serviceable")
+            raise CommerceRejected("Address not serviceable", kind=RejectionKind.NOT_SERVICEABLE)
 
     def _build_cart(self) -> Cart:
-        total = sum(i.line_total_inr for i in self._cart)
+        total = sum((i.line_total_inr for i in self._cart), Decimal(0))
         errors: list[str] = []
+        issues: list[CartIssue] = []
         if self._cart and total < MIN_ORDER_INR:
             errors.append(f"Minimum order not met: add items worth ₹{MIN_ORDER_INR - total} more")
-        fee = DELIVERY_FEE_INR if self._cart else 0
+            issues.append(CartIssue.MIN_ORDER)
+        fee = Decimal(DELIVERY_FEE_INR if self._cart else 0)
         return Cart(
             address_id=self._cart_address,
             delivery_label=next(
@@ -216,6 +206,9 @@ class MockInstamart:
             grand_total_inr=total + fee,
             payment_methods=[PaymentMethod.COD, PaymentMethod.UPI],
             errors=errors,
+            issues=issues,
+            lat=next((a.lat for a in self.addresses if a.id == self._cart_address), None),
+            lng=next((a.lng for a in self.addresses if a.id == self._cart_address), None),
         )
 
     # CommerceAdapter
@@ -227,7 +220,7 @@ class MockInstamart:
         q = query.strip().lower()
         if not q:
             raise CommerceError("Missing query")
-        q = _SYNONYMS.get(q, q)
+        q = catalogue_term(q).casefold()
         hits = [
             p for p in CATALOG if q in p.display_name.lower() or q in p.brand.lower() or q in p.id
         ]
@@ -315,6 +308,9 @@ class MockInstamart:
     async def get_cart(self) -> Cart:
         return self._build_cart()
 
+    async def get_payment_options(self) -> PaymentOptions:
+        return PaymentOptions(cod_available=self.cod_available, cod_id="COD")
+
     async def checkout(
         self,
         address_id: str,
@@ -328,9 +324,9 @@ class MockInstamart:
             raise TimeoutError("upstream timeout")
         cart = self._build_cart()
         if not cart.items:
-            raise CommerceError("Cart is empty")
+            raise CommerceRejected("Cart is empty", kind=RejectionKind.CART_EXPIRED)
         if cart.errors:
-            raise CommerceError(cart.errors[0])
+            raise CommerceRejected(cart.errors[0], kind=RejectionKind.MIN_ORDER)
         lines = [
             CartLine(spin_id=i.spin_id, sku_id=i.sku_id, quantity=i.quantity) for i in cart.items
         ]
@@ -369,7 +365,11 @@ class MockInstamart:
             self.fail_next_checkout_after_success = False
             raise TimeoutError("upstream timeout (order was actually placed)")
         return OrderResult(
-            success=True, order_ids=[oid], message="Instamart order placed successfully"
+            success=True,
+            order_ids=[oid],
+            message="Instamart order placed successfully",
+            status="PLACED",
+            total_inr=cart.grand_total_inr,
         )
 
     async def get_orders(self, count: int = 10) -> list[OrderSummary]:

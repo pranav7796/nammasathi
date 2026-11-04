@@ -33,6 +33,13 @@ const pageStatus = document.querySelector("#page-status");
 const commerceBadge = document.querySelector("#commerce-badge");
 const commerceNote = document.querySelector("#commerce-note");
 const confirmationIntro = document.querySelector("#confirmation-intro");
+const cancelButton = document.querySelector("#cancel-button");
+const optionsPanel = document.querySelector("#options-panel");
+const optionsList = document.querySelector("#options-list");
+const orderPanel = document.querySelector("#order-panel");
+const orderResult = document.querySelector("#order-result");
+const orderIds = document.querySelector("#order-ids");
+const catalogueNote = document.querySelector("#catalogue-note");
 
 let sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
 let recorder = null;
@@ -40,6 +47,8 @@ let busy = false;
 let activeAudioUrl = null;
 let microphonePending = false;
 let recordingInstruction = "";
+// The readback this page actually received. A spoken yes confirms this cart, not the latest one.
+let heardReadback = null;
 
 function setBusy(value) {
   busy = value;
@@ -93,7 +102,7 @@ function renderCart(data) {
       const editButton = document.createElement("button");
       editButton.className = "line-edit-button";
       editButton.type = "button";
-      editButton.disabled = ["CONFIRMED", "PLACING", "DONE"].includes(data.state);
+      editButton.disabled = ["CONFIRMED", "PLACING", "VERIFYING", "FAILED", "DONE", "ORDER_UNKNOWN"].includes(data.state);
       editButton.textContent = "Change / remove";
       editButton.setAttribute("aria-label", `Change or remove ${line.name}`);
       editButton.addEventListener("click", () => {
@@ -105,20 +114,27 @@ function renderCart(data) {
     }
   }
   cartTotalNode.textContent = `₹${data.total_inr}`;
+  const isMock = data.commerce_mode !== "swiggy";
   const stateLabels = {
     COLLECTING: "Ready for your request",
     CLARIFYING: "Ajji has a question",
     READBACK: "Please review",
     CONFIRMED: "Confirmed",
-    PLACING: "Placing demo order",
-    DONE: "Demo order placed",
-    FAILED: "Order not placed",
+    PLACING: isMock ? "Placing demo order" : "Placing your order",
+    VERIFYING: "Checking your order",
+    DONE: isMock ? "Demo order placed" : "Order placed",
+    FAILED: "Checking your order",
+    ORDER_UNKNOWN: "Order status unknown",
   };
   stateNode.textContent = stateLabels[data.state] || "Conversation in progress";
   confirmButton.dataset.version = data.cart_version;
   confirmButton.dataset.hash = data.cart_hash;
   const showReadback = data.show_readback === true && data.state === "READBACK";
   const canConfirm = data.can_confirm === true && showReadback;
+  heardReadback = canConfirm ? { version: data.cart_version, hash: data.cart_hash } : null;
+  renderOptions(data);
+  renderOrder(data, isMock);
+  cancelButton.disabled = !showReadback;
   confirmButton.dataset.allowed = canConfirm ? "true" : "false";
   confirmationPanel.hidden = !showReadback;
   confirmationItems.replaceChildren();
@@ -133,8 +149,9 @@ function renderCart(data) {
     const payment = data.payment_method === "COD"
       ? "Cash on delivery"
       : data.payment_method || "Payment method not set";
-    confirmationPayment.textContent = data.commerce_mode === "mock" ? `${payment} (demo only)` : payment;
+    confirmationPayment.textContent = isMock ? `${payment} (demo only)` : payment;
     if (data.commerce_mode === "swiggy") {
+      catalogueNote.textContent = "Prices and pack sizes come from Swiggy Instamart.";
       commerceBadge.textContent = "Swiggy live cart";
       commerceNote.textContent = data.checkout_enabled
         ? "Live Swiggy access is enabled. Review every detail before confirming."
@@ -142,7 +159,7 @@ function renderCart(data) {
       confirmationIntro.textContent = data.checkout_enabled
         ? "Ajji will submit this order to Swiggy only after you explicitly confirm."
         : "Live checkout is disabled. This readback will not place an order.";
-      confirmButton.textContent = data.checkout_enabled ? "Confirm Swiggy order" : "Swiggy checkout disabled";
+      confirmButton.textContent = data.checkout_enabled ? "Confirm real Swiggy order" : "Swiggy checkout disabled";
     } else {
       commerceBadge.textContent = "Demo order";
       commerceNote.textContent = "This is a demo. Orders are not sent to a shop.";
@@ -152,6 +169,39 @@ function renderCart(data) {
   }
   confirmButton.disabled = busy || !canConfirm;
   confirmNote.textContent = "Please review every item, the total, address, and payment method.";
+}
+
+function renderOptions(data) {
+  const options = data.options || [];
+  optionsPanel.hidden = !(data.state === "CLARIFYING" && options.length > 0);
+  optionsList.replaceChildren();
+  options.forEach((option, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button";
+    const quantity = option.quantity > 1 ? `${option.quantity} × ` : "";
+    button.textContent = `${index + 1}. ${quantity}${option.name}, ${option.pack_size} — ₹${option.unit_price_inr}`;
+    button.addEventListener("click", () => sendChoice(index));
+    optionsList.append(button);
+  });
+}
+
+function renderOrder(data, isMock) {
+  const ids = data.order_ids || [];
+  const unknown = data.state === "ORDER_UNKNOWN";
+  orderPanel.hidden = !(unknown || (data.state === "DONE" && ids.length > 0));
+  if (unknown) {
+    orderResult.textContent = "Ajji could not confirm this order. Please do not order again. Check the Swiggy app.";
+  } else if (isMock) {
+    orderResult.textContent = "This was a demo. No real order was placed.";
+  } else if (data.order_partial) {
+    orderResult.textContent = "Only part of this order was placed. Please check the Swiggy app.";
+  } else if (data.order_verified) {
+    orderResult.textContent = `Swiggy shows this order as: ${data.order_status || "placed"}.`;
+  } else {
+    orderResult.textContent = "Swiggy reported this order, but Ajji could not check it. Please look in the Swiggy app.";
+  }
+  orderIds.textContent = ids.length ? `Order: ${ids.join(", ")}` : "";
 }
 
 function renderReply(data) {
@@ -228,7 +278,7 @@ async function startConversation() {
     showConversation();
     renderReply(data);
     pageStatus.textContent = `${displayLanguage(data.language)} selected.`;
-    shouldRecord = true;
+    shouldRecord = data.state === "COLLECTING";
   } catch (error) {
     showError(error.message);
     pageStatus.textContent = "Could not start the conversation.";
@@ -257,6 +307,7 @@ async function loadAddresses() {
   addressSelect.disabled = data.addresses.length === 0;
   startButton.disabled = data.addresses.length === 0 || data.addresses.length > 1;
   if (data.commerce_mode === "swiggy") {
+    catalogueNote.textContent = "Prices and pack sizes come from Swiggy Instamart.";
     commerceBadge.textContent = "Swiggy live cart";
     commerceNote.textContent = data.checkout_enabled
       ? "Live Swiggy access is enabled. Review every detail before confirming."
@@ -379,7 +430,12 @@ async function uploadTurn(wav) {
   try {
     const data = await requestJson("/api/session/turn", {
       method: "POST",
-      headers: { "Content-Type": "audio/wav" },
+      headers: {
+        "Content-Type": "audio/wav",
+        ...(heardReadback
+          ? { "X-Heard-Cart-Version": String(heardReadback.version), "X-Heard-Cart-Hash": heardReadback.hash }
+          : {}),
+      },
       body: wav,
     });
     renderReply(data);
@@ -393,22 +449,22 @@ async function uploadTurn(wav) {
   }
 }
 
-async function sendAction() {
+async function sendAction(body = {
+  action: "confirm",
+  cart_version: Number(confirmButton.dataset.version),
+  cart_hash: confirmButton.dataset.hash,
+}) {
   setBusy(true);
   showError("");
-  pageStatus.textContent = "Confirming this demo order…";
+  pageStatus.textContent = "Ajji is working on it…";
   try {
     const data = await requestJson("/api/session/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "confirm",
-        cart_version: Number(confirmButton.dataset.version),
-        cart_hash: confirmButton.dataset.hash,
-      }),
+      body: JSON.stringify(body),
     });
     renderReply(data);
-    pageStatus.textContent = data.state === "DONE" ? "Mock order complete." : "Cart updated.";
+    pageStatus.textContent = data.state === "DONE" ? "Finished." : "Basket updated.";
   } catch (error) {
     if (error.status === 409 && error.data?.cart) {
       renderReply(error.data);
@@ -421,12 +477,17 @@ async function sendAction() {
   }
 }
 
+function sendChoice(index) {
+  return sendAction({ action: "select_option", option_index: index });
+}
+
 async function restoreConversation() {
   if (!sessionId) return;
   try {
     const data = await requestJson("/api/session");
     showConversation();
     renderCart(data);
+    if (data.last_reply) assistantNode.textContent = data.last_reply;
     languageSelect.value = data.language;
     selectedLanguage.textContent = displayLanguage(data.language);
     pageStatus.textContent = `Conversation restored. ${displayLanguage(data.language)} selected.`;
@@ -435,7 +496,7 @@ async function restoreConversation() {
   }
 }
 
-pageStatus.textContent = "Ready to start your mock grocery order.";
+pageStatus.textContent = "Ready to start.";
 startButton.addEventListener("click", startConversation);
 void loadAddresses().catch((error) => {
   showError(error.message);
@@ -446,7 +507,8 @@ recordButton.addEventListener("click", () => {
   if (recorder) finishRecording();
   else beginRecording();
 });
-confirmButton.addEventListener("click", sendAction);
+confirmButton.addEventListener("click", () => sendAction());
+cancelButton.addEventListener("click", () => sendAction({ action: "cancel" }));
 backButton.addEventListener("click", () => {
   confirmationPanel.hidden = true;
   pageStatus.textContent = "Tell Ajji what you would like to change.";
@@ -457,7 +519,8 @@ newSessionButton.addEventListener("click", () => {
   sessionId = null;
   conversation.hidden = true;
   startPanel.hidden = false;
-  pageStatus.textContent = "The previous conversation remains mock-only. Start another when ready.";
+  heardReadback = null;
+  pageStatus.textContent = "Start another conversation when ready.";
 });
 
 restoreConversation();

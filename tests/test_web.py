@@ -5,6 +5,7 @@ import io
 import wave
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
@@ -12,12 +13,19 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.commerce.base import CartLine
 from app.commerce.mock import MockInstamart
+from app.commerce.order_journal import FileOrderJournal, new_attempt
 from app.config import Settings, load_settings
 from app.llm.extractor import GeminiIntentExtractor, GroceryIntent, GroceryItem
+from app.orchestrator.checkout import CheckoutPolicy
 from app.orchestrator.state_machine import State
 from app.voice.gnani import GnaniError, PrismaSTT, PrismaTranscript, TimbreTTS
-from app.web import MAX_AUDIO_BYTES, create_app
+from app.web import (
+    MAX_AUDIO_BYTES,
+    _default_tts_factory,  # pyright: ignore[reportPrivateUsage]
+    create_app,
+)
 from tests.test_gemini_extractor import FakeResponse
 
 
@@ -374,7 +382,7 @@ async def test_stale_readback_confirmation_is_rejected() -> None:
     stt_factory, tts_factory = _speech_factories(services)
     app = create_app(
         settings=_settings(),
-        extractor_factory=_extractor_factory([_intent("rice", 1)]),
+        extractor_factory=_extractor_factory([_intent("rice", 2)]),
         stt_factory=stt_factory,
         tts_factory=tts_factory,
     )
@@ -498,3 +506,303 @@ async def test_browser_app_refuses_real_commerce_configuration(
     with pytest.raises(RuntimeError, match="COMMERCE_BACKEND=mock"):
         async with app.router.lifespan_context(app):
             pytest.fail("unsafe configuration entered the application lifespan")
+
+
+class LiveLikeMock(MockInstamart):
+    """A non-mock backend for the web layer; still entirely in memory."""
+
+
+def _real_settings(tmp_path: Path, **overrides: str) -> Settings:
+    values = {
+        "COMMERCE_BACKEND": "swiggy",
+        "SWIGGY_LIVE_ACCESS": "true",
+        "ALLOW_SWIGGY_CART_WRITES": "true",
+        "ALLOW_REAL_CHECKOUT": "true",
+        "MAX_REAL_ORDER_INR": "5000",
+        "ORDER_JOURNAL_PATH": str(tmp_path / "attempts.jsonl"),
+        "GNANI_API_KEY": "test-gnani-key",
+        "GEMINI_API_KEY": "test-gemini-key",
+        **overrides,
+    }
+    return load_settings(values)
+
+
+def _real_app(
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    intents: list[GroceryIntent],
+    services: FakeVoiceServices,
+) -> tuple[FastAPI, LiveLikeMock]:
+    shop = LiveLikeMock()
+
+    def fake_adapter(_: Settings) -> LiveLikeMock:
+        return shop
+
+    def fast_policy(_: Settings) -> CheckoutPolicy:
+        return CheckoutPolicy(max_orders=1, max_total_inr=Decimal(5000))
+
+    monkeypatch.setattr("app.web.commerce_adapter", fake_adapter)
+    monkeypatch.setattr("app.web.checkout_policy", fast_policy)
+    stt_factory, tts_factory = _speech_factories(services)
+    app = create_app(
+        settings=settings,
+        extractor_factory=_extractor_factory(intents),
+        stt_factory=stt_factory,
+        tts_factory=tts_factory,
+    )
+    return app, shop
+
+
+@asynccontextmanager
+async def _local_client(app: FastAPI) -> AsyncGenerator[httpx.AsyncClient, None]:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 5000)),
+            base_url="http://localhost:8000",
+        ) as client,
+    ):
+        yield client
+
+
+async def test_real_mode_rejects_other_machines_and_foreign_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app, _ = _real_app(monkeypatch, _real_settings(tmp_path), [], FakeVoiceServices([]))
+    async with app.router.lifespan_context(app):
+        for client_host, base_url, origin in (
+            ("10.0.0.5", "http://localhost:8000", None),
+            ("127.0.0.1", "http://evil.example", None),
+            ("127.0.0.1", "http://localhost:8000", "http://evil.example"),
+        ):
+            transport = httpx.ASGITransport(app=app, client=(client_host, 5000))
+            headers = {"Origin": origin} if origin else {}
+            async with httpx.AsyncClient(transport=transport, base_url=base_url) as client:
+                response = await client.post(
+                    "/api/sessions", json={"language": "en-IN"}, headers=headers
+                )
+            assert response.status_code == 403
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 5000)),
+            base_url="http://localhost:8000",
+        ) as client:
+            assert (await client.get("/api/addresses")).status_code == 200
+
+
+async def test_real_spoken_yes_needs_the_readback_this_browser_received(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    services = FakeVoiceServices(["rice", "yes", "yes"])
+    app, shop = _real_app(monkeypatch, _real_settings(tmp_path), [_intent("rice", 2)], services)
+
+    async with _local_client(app) as client:
+        created = await _create_session(client, "en-IN")
+        session_id = str(created["session_id"])
+        turn = (await _upload(client, session_id)).json()
+        assert turn["can_confirm"] is True
+
+        # No echo of what was heard: refused, and the cart is read out again.
+        blind = await _upload(client, session_id)
+        assert blind.status_code == 200
+        assert shop.checkout_calls == 0
+        assert "Your basket has" in blind.json()["assistant_text"]
+
+        heard = await client.post(
+            "/api/session/turn",
+            headers={
+                **_session_headers(session_id),
+                "Content-Type": "audio/wav",
+                "X-Heard-Cart-Version": str(turn["cart_version"]),
+                "X-Heard-Cart-Hash": str(turn["cart_hash"]),
+            },
+            content=_wav_bytes(),
+        )
+
+    data = heard.json()
+    assert shop.checkout_calls == 1
+    assert data["state"] == State.DONE.value
+    assert data["order_ids"] == ["IM000001"]
+    assert data["order_verified"] is True
+    assert "demo" not in data["assistant_text"].casefold()
+    assert "mock" not in data["assistant_text"].casefold()
+
+
+async def test_read_only_mode_cannot_confirm_or_change_the_cart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _real_settings(
+        tmp_path,
+        ALLOW_REAL_CHECKOUT="false",
+        ALLOW_SWIGGY_CART_WRITES="false",
+        MAX_REAL_ORDER_INR="",
+    )
+    services = FakeVoiceServices(["rice"])
+    app, shop = _real_app(monkeypatch, settings, [_intent("rice", 2)], services)
+
+    async with _local_client(app) as client:
+        created = await _create_session(client, "en-IN")
+        assert created["checkout_enabled"] is False
+        assert created["can_confirm"] is False
+        assert shop.checkout_calls == 0
+
+
+async def test_unresolved_attempt_blocks_the_browser_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _real_settings(tmp_path)
+    FileOrderJournal(Path(settings.order_journal_path)).begin(
+        new_attempt("h", "100", (), ("Rice",)), lambda _: None
+    )
+    services = FakeVoiceServices(["rice"])
+    app, shop = _real_app(monkeypatch, settings, [_intent("rice", 2)], services)
+
+    async with _local_client(app) as client:
+        created = await _create_session(client, "en-IN")
+
+    assert created["state"] == State.ORDER_UNKNOWN.value
+    assert created["can_confirm"] is False
+    assert "do not order again" in str(created["assistant_text"])
+    assert shop.checkout_calls == 0
+
+
+async def test_existing_cart_for_another_address_is_explained(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app, shop = _real_app(monkeypatch, _real_settings(tmp_path), [], FakeVoiceServices([]))
+    await shop.update_cart(
+        "addr_home", [CartLine(spin_id="atta_5kg", sku_id="sku_atta_5kg", quantity=1)]
+    )
+    shop._cart_address = "addr_elsewhere"  # pyright: ignore[reportPrivateUsage]
+
+    async with _local_client(app) as client:
+        response = await client.post("/api/sessions", json={"language": "en-IN"})
+
+    assert response.status_code == 409
+    assert "will not overwrite" in response.json()["detail"]
+    assert len(shop._cart) == 1  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_choosing_an_option_by_tap_uses_the_same_rules() -> None:
+    services = FakeVoiceServices(["toor dal"])
+    stt_factory, tts_factory = _speech_factories(services)
+    intent = GroceryIntent(
+        intent="add_items", items=[GroceryItem(name="rice", quantity=1, unit=None)]
+    )
+    app = create_app(
+        settings=_settings(),
+        extractor_factory=_extractor_factory([intent]),
+        stt_factory=stt_factory,
+        tts_factory=tts_factory,
+    )
+
+    async with _client_for(app) as client:
+        created = await _create_session(client, "en-IN")
+        session_id = str(created["session_id"])
+        asked = (await _upload(client, session_id)).json()
+        assert asked["state"] == State.CLARIFYING.value
+        assert [option["pack_size"] for option in asked["options"]] == ["1 kg", "5 kg", "10 kg"]
+        assert "5 kg" in asked["assistant_text"]
+
+        bad = await client.post(
+            "/api/session/action",
+            headers=_session_headers(session_id),
+            json={"action": "select_option", "option_index": 7},
+        )
+        assert bad.json()["state"] == State.CLARIFYING.value
+
+        chosen = await client.post(
+            "/api/session/action",
+            headers=_session_headers(session_id),
+            json={"action": "select_option", "option_index": 1},
+        )
+
+    data = chosen.json()
+    assert data["state"] == State.READBACK.value
+    assert data["cart"][0]["pack_size"] == "5 kg"
+    assert data["options"] == []
+
+
+async def test_reply_is_recoverable_after_a_lost_response() -> None:
+    services = FakeVoiceServices(["rice"])
+    stt_factory, tts_factory = _speech_factories(services)
+    app = create_app(
+        settings=_settings(),
+        extractor_factory=_extractor_factory([_intent("rice", 2)]),
+        stt_factory=stt_factory,
+        tts_factory=tts_factory,
+    )
+
+    async with _client_for(app) as client:
+        created = await _create_session(client, "en-IN")
+        session_id = str(created["session_id"])
+        turn = (await _upload(client, session_id)).json()
+        await client.post(
+            "/api/session/action",
+            headers=_session_headers(session_id),
+            json={
+                "action": "confirm",
+                "cart_version": turn["cart_version"],
+                "cart_hash": turn["cart_hash"],
+            },
+        )
+        # The browser lost that response and reloads.
+        restored = (await client.get("/api/session", headers=_session_headers(session_id))).json()
+
+    assert restored["state"] == State.DONE.value
+    assert restored["order_ids"] == ["IM000001"]
+    assert "demo" in restored["last_reply"].casefold()
+
+
+async def test_broken_speech_cannot_hide_a_placed_order() -> None:
+    class ExplodingTts:
+        async def synthesize(self, text: str, output_path: str | Path) -> Path:
+            raise RuntimeError("voice engine bug")
+
+    services = FakeVoiceServices(["rice"])
+    stt_factory, _ = _speech_factories(services)
+    app = create_app(
+        settings=_settings(),
+        extractor_factory=_extractor_factory([_intent("rice", 2)]),
+        stt_factory=stt_factory,
+        tts_factory=lambda settings, language: cast(TimbreTTS, ExplodingTts()),
+    )
+
+    async with _client_for(app) as client:
+        created = await _create_session(client, "en-IN")
+        session_id = str(created["session_id"])
+        turn = (await _upload(client, session_id)).json()
+        placed = await client.post(
+            "/api/session/action",
+            headers=_session_headers(session_id),
+            json={
+                "action": "confirm",
+                "cart_version": turn["cart_version"],
+                "cart_hash": turn["cart_hash"],
+            },
+        )
+
+    assert placed.status_code == 200
+    assert placed.json()["state"] == State.DONE.value
+    assert placed.json()["audio_error"]
+
+
+async def test_paise_reach_the_browser_as_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from decimal import Decimal as D
+
+    from app.web import _money_json  # pyright: ignore[reportPrivateUsage]
+
+    del monkeypatch
+    assert _money_json(D("86.50")) == 86.5
+    assert _money_json(D(87)) == 87
+    assert isinstance(_money_json(D(87)), int)
+
+
+def test_voices_match_each_language_preference() -> None:
+    assert _default_voice_for("kn-IN") == "Saanvi"
+    assert _default_voice_for("hi-IN") == "Nalini"
+    assert _default_voice_for("en-IN") == "Kaveri"
+
+
+def _default_voice_for(language: str) -> str:
+    settings = load_settings({"GNANI_API_KEY": "k"})
+    return _default_tts_factory(settings, language).voice

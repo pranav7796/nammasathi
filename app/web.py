@@ -1,43 +1,59 @@
-"""Same-origin browser API for the local, mock-backed voice demo."""
+"""Same-origin browser API for the local voice assistant."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from secrets import token_urlsafe
 from typing import Literal, cast
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.commerce.base import CommerceError
-from app.commerce.runtime import commerce_adapter
+from app.commerce.base import CommerceAdapter, CommerceAuthRequired, CommerceError
+from app.commerce.runtime import checkout_policy, commerce_adapter, order_journal
+from app.commerce.swiggy import SwiggyInstamart
 from app.config import Settings, load_settings
 from app.llm.extractor import GeminiIntentExtractor, IntentExtractionError
+from app.observability import configure_logging, log_event
 from app.orchestrator.state_machine import (
     CallStarted,
     Effect,
+    Money,
+    OptionSelected,
     Say,
     State,
     UserCancelled,
     UserConfirmed,
 )
-from app.orchestrator.turn_runner import TextTurnRunner
-from app.voice.gnani import SUPPORTED_LANGUAGES, GnaniError, PrismaSTT, TimbreTTS
+from app.orchestrator.turn_runner import ExistingCartConflict, TextTurnRunner
+from app.voice.gnani import (
+    DEFAULT_VOICES,
+    SUPPORTED_LANGUAGES,
+    GnaniError,
+    PrismaSTT,
+    TimbreTTS,
+)
 from app.voice.presentation import response_text, speech_error_text
 
 MAX_AUDIO_BYTES = 12 * 1024 * 1024
 DEFAULT_SESSION_TTL_SECONDS = 30 * 60
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+LOOPBACK_CLIENTS = frozenset({"127.0.0.1", "::1"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+logger = logging.getLogger(__name__)
 
 
 class StartSessionRequest(BaseModel):
@@ -46,9 +62,10 @@ class StartSessionRequest(BaseModel):
 
 
 class SessionActionRequest(BaseModel):
-    action: Literal["confirm", "cancel"]
+    action: Literal["confirm", "cancel", "select_option"]
     cart_version: int | None = None
     cart_hash: str | None = None
+    option_index: int | None = None
 
 
 @dataclass
@@ -57,6 +74,7 @@ class BrowserSession:
     language: str
     last_activity: float
     lock: asyncio.Lock
+    last_reply: str = ""
 
 
 ExtractorFactory = Callable[[], GeminiIntentExtractor]
@@ -77,11 +95,23 @@ def create_app(
     sessions_lock = asyncio.Lock()
     extractor_lock = asyncio.Lock()
     default_extractor: GeminiIntentExtractor | None = None
+    shared_adapter: CommerceAdapter | None = None
+
+    def adapter_for(runtime_settings: Settings) -> CommerceAdapter:
+        """Mock carts are per session; a live account has one cart and one MCP session."""
+        nonlocal shared_adapter
+        if runtime_settings.commerce_backend == "mock":
+            return commerce_adapter(runtime_settings)
+        if shared_adapter is None:
+            shared_adapter = commerce_adapter(runtime_settings)
+        return shared_adapter
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
-        load_dotenv()
+        if settings is None:
+            load_dotenv()
         runtime_settings = settings or load_settings()
+        configure_logging()
         if (
             runtime_settings.commerce_backend == "swiggy"
             and not runtime_settings.swiggy_live_access
@@ -92,11 +122,28 @@ def create_app(
             )
         application.state.settings = runtime_settings
         application.state.sessions = sessions
+        log_event("app_started", mode=runtime_settings.commerce_backend)
         yield
         sessions.clear()
+        if isinstance(shared_adapter, SwiggyInstamart):
+            await shared_adapter.aclose()
 
     application = FastAPI(title="Ajji Mart Voice Demo", lifespan=lifespan)
     application.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @application.middleware("http")
+    async def local_only_for_real_account(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """A real account sits behind this API, so accept only this machine's own browser."""
+        runtime_settings = cast(Settings | None, getattr(request.app.state, "settings", None))
+        if (
+            runtime_settings is not None
+            and runtime_settings.commerce_backend != "mock"
+            and not _is_local_request(request)
+        ):
+            return JSONResponse(status_code=403, content={"detail": "Local access only."})
+        return await call_next(request)
 
     async def resolve_extractor() -> GeminiIntentExtractor:
         if extractor_factory is not None:
@@ -104,7 +151,10 @@ def create_app(
         nonlocal default_extractor
         async with extractor_lock:
             if default_extractor is None:
-                default_extractor = GeminiIntentExtractor.from_env()
+                allow_logged = cast(Settings, application.state.settings).commerce_backend == "mock"
+                default_extractor = await asyncio.to_thread(
+                    GeminiIntentExtractor.from_env, allow_logged_fallback=allow_logged
+                )
             return default_extractor
 
     @application.get("/", include_in_schema=False)
@@ -114,7 +164,7 @@ def create_app(
     @application.get("/api/addresses")
     async def list_addresses(request: Request) -> dict[str, object]:
         try:
-            addresses = await commerce_adapter(_get_settings(request)).get_addresses()
+            addresses = await adapter_for(_get_settings(request)).get_addresses()
         except CommerceError as exc:
             raise HTTPException(
                 status_code=503,
@@ -141,13 +191,28 @@ def create_app(
         try:
             extractor = await resolve_extractor()
             runner = await TextTurnRunner.create(
-                commerce_adapter(runtime_settings),
+                adapter_for(runtime_settings),
                 extractor=extractor,
                 address_id=payload.address_id,
+                journal=order_journal(runtime_settings),
+                policy=checkout_policy(runtime_settings),
             )
             effects = await runner.dispatch(CallStarted(user_known=True, language=payload.language))
         except IntentExtractionError as exc:
             raise HTTPException(status_code=503, detail=exc.user_message) from exc
+        except ExistingCartConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Your Swiggy basket is set to a different address. Choose that address, "
+                    "or finish or empty the basket in the Swiggy app. Ajji will not overwrite it."
+                ),
+            ) from exc
+        except CommerceAuthRequired as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Swiggy login has expired. Run `uv run python -m app.swiggy_auth`.",
+            ) from exc
         except CommerceError as exc:
             raise HTTPException(
                 status_code=503, detail="The selected commerce service is unavailable."
@@ -208,7 +273,9 @@ def create_app(
                     audio_path.write_bytes(audio_bytes)
                     stt = (stt_factory or _default_stt_factory)(runtime_settings, entry.language)
                     transcript = await stt.transcribe(audio_path)
-                    effects = await entry.runner.dispatch_text(transcript.text)
+                    effects = await entry.runner.dispatch_text(
+                        transcript.text, heard=_heard_readback(request, runtime_settings)
+                    )
                     return await _response_payload(
                         entry,
                         effects,
@@ -240,39 +307,29 @@ def create_app(
                         status_code=422,
                         detail="Review the current cart before confirming it.",
                     )
-                if (
-                    payload.cart_version != entry.runner.session.cart_version
-                    or payload.cart_hash != entry.runner.session.cart_hash
-                ):
-                    session = entry.runner.session
-                    lines = "; ".join(
-                        f"{line.quantity} x {line.pack_size} {line.name}" for line in session.cart
-                    )
-                    readback = Say(
-                        "readback",
-                        data={
-                            "lines": lines,
-                            "total": str(session.total_inr),
-                            "payment": "COD",
-                            "address_label": session.address_label,
-                            "address": session.delivery_address or session.address_label,
-                        },
-                    )
+                session = entry.runner.session
+                stale = (
+                    payload.cart_version != session.readback_version
+                    or payload.cart_hash != session.readback_hash
+                )
+                # A stale page gets a fresh readback from the state machine, never an order.
+                event = UserConfirmed(payload.cart_version, payload.cart_hash)
+                effects = await _dispatch_action(entry, event)
+                if stale:
                     refreshed = await _response_payload(
                         entry,
-                        [Say("cart_changed"), readback],
+                        [Say("cart_changed"), *effects],
                         runtime_settings,
                         tts_factory,
                         session_id=session_id,
                     )
                     return JSONResponse(status_code=409, content=refreshed)
-                event = UserConfirmed(
-                    entry.runner.session.cart_version,
-                    entry.runner.session.cart_hash,
-                )
+            elif payload.action == "select_option":
+                if payload.option_index is None:
+                    raise HTTPException(status_code=422, detail="Choose one of the options.")
+                effects = await _dispatch_action(entry, OptionSelected(payload.option_index))
             else:
-                event = UserCancelled()
-            effects = await entry.runner.dispatch(event)
+                effects = await _dispatch_action(entry, UserCancelled())
             return await _response_payload(
                 entry,
                 effects,
@@ -282,6 +339,41 @@ def create_app(
             )
 
     return application
+
+
+async def _dispatch_action(
+    entry: BrowserSession, event: UserConfirmed | OptionSelected | UserCancelled
+) -> list[Effect]:
+    try:
+        return await entry.runner.dispatch(event)
+    except (IntentExtractionError, CommerceError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Ajji could not safely process that turn. Please try again.",
+        ) from exc
+
+
+def _is_local_request(request: Request) -> bool:
+    client = request.client.host if request.client else ""
+    host_header = request.headers.get("host", "")
+    host = urlsplit(f"//{host_header}").hostname or ""
+    origin = request.headers.get("origin")
+    same_origin = origin is None or origin == f"http://{host_header}"
+    return client in LOOPBACK_CLIENTS and host in LOOPBACK_HOSTS and same_origin
+
+
+def _heard_readback(request: Request, settings: Settings) -> tuple[int, str] | None:
+    """The readback this browser actually received; a live order requires it."""
+    version = request.headers.get("x-heard-cart-version", "")
+    digest = request.headers.get("x-heard-cart-hash", "")
+    if version.isdigit() and digest:
+        return int(version), digest
+    return None if settings.commerce_backend == "mock" else (-1, "")
+
+
+def _money_json(amount: Money) -> int | float:
+    value = Decimal(amount)
+    return int(value) if value == value.to_integral_value() else float(value)
 
 
 def _get_settings(request: Request) -> Settings:
@@ -306,7 +398,7 @@ def _default_stt_factory(settings: Settings, language: str) -> PrismaSTT:
 def _default_tts_factory(settings: Settings, language: str) -> TimbreTTS:
     return TimbreTTS(
         settings.gnani_api_key or "",
-        voice=settings.gnani_tts_voice,
+        voice=settings.gnani_tts_voice or DEFAULT_VOICES[language],
         language=language,
         model=settings.gnani_tts_model,
         speed=settings.gnani_tts_speed,
@@ -318,13 +410,15 @@ def _session_payload(
     session_id: str, entry: BrowserSession, settings: Settings
 ) -> dict[str, object]:
     session = entry.runner.session
+    checkout_enabled = settings.commerce_backend == "mock" or settings.allow_real_checkout
+    pending = session.pending
     cart = [
         {
             "name": line.name,
             "pack_size": line.pack_size,
             "quantity": line.quantity,
-            "unit_price_inr": line.unit_price_inr,
-            "line_total_inr": line.quantity * line.unit_price_inr,
+            "unit_price_inr": _money_json(line.unit_price_inr),
+            "line_total_inr": _money_json(line.quantity * line.unit_price_inr),
         }
         for line in session.cart
     ]
@@ -335,18 +429,31 @@ def _session_payload(
         "cart_version": session.cart_version,
         "cart_hash": session.cart_hash,
         "cart": cart,
-        "total_inr": session.total_inr,
+        "total_inr": _money_json(session.total_inr),
+        "fees_inr": _money_json(session.fees_inr),
+        "store_count": session.store_count,
+        "issues": list(session.issues),
         "address_label": session.address_label,
         "delivery_address": session.delivery_address,
-        "payment_method": "COD",
+        "payment_method": session.payment_method,
         "commerce_mode": settings.commerce_backend,
-        "checkout_enabled": settings.commerce_backend == "mock" or settings.allow_real_checkout,
+        "checkout_enabled": checkout_enabled,
         "show_readback": session.state is State.READBACK and bool(session.cart),
-        "can_confirm": (
-            (settings.commerce_backend == "mock" or settings.allow_real_checkout)
-            and session.state is State.READBACK
-            and bool(session.cart)
-        ),
+        "can_confirm": checkout_enabled and entry.runner.confirmable,
+        "options": [
+            {
+                "name": option.name,
+                "pack_size": option.pack_size,
+                "quantity": option.quantity,
+                "unit_price_inr": _money_json(option.unit_price_inr),
+            }
+            for option in (pending.options if pending is not None else ())
+        ],
+        "order_ids": list(session.order_ids),
+        "order_status": session.order_status,
+        "order_verified": session.order_verified,
+        "order_partial": session.order_partial,
+        "last_reply": entry.last_reply,
         "tts_language": entry.language,
     }
 
@@ -360,7 +467,11 @@ async def _response_payload(
     session_id: str,
     transcript: str | None = None,
 ) -> dict[str, object]:
-    message = response_text(effects, language=entry.language)
+    message = response_text(
+        effects, language=entry.language, commerce_mode=settings.commerce_backend
+    )
+    if message:
+        entry.last_reply = message  # survives a lost response, e.g. after a placed order
     audio_base64: str | None = None
     audio_error: str | None = None
     if message:
@@ -373,6 +484,10 @@ async def _response_payload(
             audio_error = speech_error_text(entry.language)
         except OSError:
             audio_error = "Ajji's audio response could not be saved."
+        except Exception:
+            # Speech must never hide what just happened, least of all a placed order.
+            logger.exception("Reply synthesis failed")
+            audio_error = speech_error_text(entry.language)
 
     result = _session_payload(session_id, entry, settings)
     result.update(

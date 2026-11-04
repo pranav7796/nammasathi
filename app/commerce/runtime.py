@@ -1,11 +1,14 @@
-"""Construct the commerce adapter selected by local runtime settings."""
+"""Construct the commerce adapter and checkout safeguards selected by runtime settings."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mcp.shared.auth import AuthorizationCodeResult
 
-from app.commerce.base import CommerceAdapter, CommerceError
+from app.commerce.base import CommerceAdapter, CommerceAuthRequired, CommerceError
 from app.commerce.mock import MockInstamart
+from app.commerce.order_journal import FileOrderJournal, InMemoryOrderJournal, OrderJournal
 from app.commerce.swiggy import (
     OAUTH_REDIRECT_URI,
     SWIGGY_MCP_URL,
@@ -13,30 +16,55 @@ from app.commerce.swiggy import (
     SwiggyInstamart,
 )
 from app.config import Settings
+from app.orchestrator.checkout import (
+    REAL_RECONCILE_DELAYS,
+    REAL_REJECTION_DELAYS,
+    REAL_VERIFY_DELAYS,
+    CheckoutPolicy,
+)
+
+_LOGIN_MESSAGE = "Swiggy login is missing or expired. Run `uv run python -m app.swiggy_auth`."
 
 
-async def _interactive_login_required(_: str) -> None:
-    raise CommerceError(
-        "Swiggy login is missing or expired. Run `uv run python -m app.swiggy_auth`."
-    )
+async def interactive_login_required(_: str) -> None:
+    raise CommerceAuthRequired(_LOGIN_MESSAGE)
 
 
-async def _no_interactive_callback() -> AuthorizationCodeResult:
-    raise CommerceError(
-        "Swiggy login is missing or expired. Run `uv run python -m app.swiggy_auth`."
-    )
+async def no_interactive_callback() -> AuthorizationCodeResult:
+    raise CommerceAuthRequired(_LOGIN_MESSAGE)
 
 
 def commerce_adapter(settings: Settings) -> CommerceAdapter:
+    """Mock mode never constructs a Swiggy client, so it cannot touch real account data."""
     if settings.commerce_backend == "mock":
         return MockInstamart()
     if not settings.swiggy_live_access:
         raise CommerceError("Enable SWIGGY_LIVE_ACCESS for local Swiggy account access")
+    endpoint = settings.swiggy_mcp_url or SWIGGY_MCP_URL
     return SwiggyInstamart(
-        endpoint=settings.swiggy_mcp_url or SWIGGY_MCP_URL,
+        endpoint=endpoint,
         redirect_uri=OAUTH_REDIRECT_URI,
-        storage=KeyringTokenStorage(),
-        redirect_handler=_interactive_login_required,
-        callback_handler=_no_interactive_callback,
+        storage=KeyringTokenStorage(endpoint=endpoint),
+        redirect_handler=interactive_login_required,
+        callback_handler=no_interactive_callback,
         allow_real_checkout=settings.allow_real_checkout,
+        allow_cart_writes=settings.allow_swiggy_cart_writes,
+    )
+
+
+def order_journal(settings: Settings) -> OrderJournal:
+    if settings.commerce_backend == "mock":
+        return InMemoryOrderJournal()
+    return FileOrderJournal(Path(settings.order_journal_path))
+
+
+def checkout_policy(settings: Settings) -> CheckoutPolicy:
+    if settings.commerce_backend == "mock":
+        return CheckoutPolicy()
+    return CheckoutPolicy(
+        max_total_inr=settings.max_real_order_inr,
+        max_orders=settings.real_order_limit,
+        reconcile_delays=REAL_RECONCILE_DELAYS,
+        rejection_delays=REAL_REJECTION_DELAYS,
+        verify_delays=REAL_VERIFY_DELAYS,
     )
