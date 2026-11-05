@@ -201,6 +201,11 @@ validated intent.
 Do not leak Swiggy MCP or Gnani-specific JSON shapes into the state
 machine or domain models.
 
+A hosted server gives each signed-in, approved user their own adapters, token, and journal
+(`app/accounts/`). Never share an adapter, token, or journal between users, and never construct a
+keyring-backed client when `MULTI_USER_LIVE` is on. `tests/fake_swiggy.py` is the stand-in for
+end-to-end tests; update it from observed behaviour, and never let it reach the Docker image.
+
 Use `MockCommerce` for local end-to-end work. It should have a small
 deterministic catalogue and support controlled failure scenarios.
 

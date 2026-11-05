@@ -182,6 +182,51 @@ audio { display: block; width: 100%; height: 40px; margin-top: 10px; }
 .page-status { min-height: 22px; margin: 10px 0 0; color: var(--muted); font-size: .8rem; }
 .conversation:not([hidden]) ~ .page-status, .conversation:not([hidden]) ~ .timings { position: relative; top: -150px; }
 
+/* Accounts */
+.icon-sprite { position: absolute; }
+.account-button { flex: none; min-height: 44px; padding: 6px 16px; border: 2px solid var(--teal); border-radius: 999px; background: white; color: var(--teal-dark); font-size: .85rem; font-weight: 700; white-space: nowrap; }
+.account-button:hover { background: var(--teal-tint); }
+.demo-badge + .account-button { margin-left: 0; }
+.mode-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; }
+.mode-option { display: grid; gap: 2px; min-height: 78px; padding: 10px 12px; border: 2px solid var(--line); border-radius: 16px; background: white; text-align: left; }
+.mode-option small { color: var(--muted); font-size: .72rem; line-height: 1.3; }
+.mode-option:hover { border-color: var(--teal); }
+.mode-option[aria-pressed="true"] { border-color: var(--teal); background: var(--teal-tint); box-shadow: inset 0 0 0 1px var(--teal); }
+.account-dialog { width: min(100% - 24px, 480px); max-height: min(100dvh - 24px, 760px); padding: clamp(18px, 3vw, 28px); border: 0; border-radius: 22px; background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+.account-dialog::backdrop { background: rgb(43 33 28 / 45%); }
+.account-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.account-head h2 { margin: 0; font-size: 1.45rem; color: var(--teal-dark); }
+.account-message { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; background: var(--teal-tint); font-size: .88rem; font-weight: 500; }
+.account-message[data-tone="error"] { background: var(--brick-tint); color: #7a2410; }
+.account-form { display: grid; gap: 4px; }
+.account-form label { margin: 10px 0 2px; font-size: .9rem; }
+.account-form input:not([type="checkbox"]) { width: 100%; min-height: 50px; padding: 8px 14px; border: 2px solid var(--line); border-radius: 14px; background: white; }
+.account-form input:focus { border-color: var(--teal); outline: none; }
+.account-form .secondary-button, .account-form .danger-button { margin-top: 10px; }
+.account-consent { display: flex; align-items: flex-start; gap: 10px; font-weight: 500; }
+.account-consent input { flex: none; width: 22px; height: 22px; margin-top: 3px; accent-color: var(--teal); }
+.account-primary { display: flex; align-items: center; justify-content: center; min-height: 54px; margin-top: 14px; padding: 8px 18px; border: 0; border-radius: 16px; background: var(--teal); color: white; font-family: var(--display); font-size: 1.1rem; font-weight: 700; text-decoration: none; }
+.account-primary:hover:not(:disabled) { background: var(--teal-dark); }
+.danger-button { min-height: 50px; padding: 8px 16px; border: 2px solid var(--brick); border-radius: 14px; background: white; color: var(--brick); font-weight: 700; }
+.danger-button:hover:not(:disabled) { background: var(--brick-tint); }
+.account-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin: 12px 0 0; }
+.account-identity { margin-bottom: 8px; overflow-wrap: anywhere; }
+.account-identity .small-note { margin: 0; }
+.account-card { margin-top: 12px; padding: 14px 16px; border: 2px solid var(--line); border-radius: 16px; background: white; }
+.account-card h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 6px; font-family: var(--display); font-size: 1.1rem; }
+.account-card p { margin-bottom: 0; font-size: .9rem; }
+.account-card summary { min-height: 32px; font-weight: 700; cursor: pointer; }
+.account-card .secondary-button { width: 100%; margin-top: 12px; }
+.account-orders { margin: 0; padding: 0; list-style: none; }
+.account-orders li { display: grid; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: .85rem; overflow-wrap: anywhere; }
+.account-orders li span { color: var(--muted); font-size: .78rem; }
+.account-orders li[data-tone="attention"] span { color: var(--brick); font-weight: 700; }
+.plain-page { max-width: 42rem; margin: 0 auto; padding: 32px 18px 64px; }
+.plain-page h1 { font-family: var(--display); color: var(--teal-dark); line-height: 1.1; }
+.plain-page h2 { margin-top: 28px; font-size: 1.25rem; color: var(--teal-dark); }
+.plain-page li { margin-bottom: 8px; }
+.plain-page a, .account-dialog a:not(.account-primary) { color: var(--teal); }
+
 @media (max-width: 860px) {
   .home-panel { grid-template-columns: minmax(0, 1fr); }
   .hero h2 { font-size: clamp(2.2rem, 11vw, 3.2rem); }
@@ -196,6 +241,8 @@ audio { display: block; width: 100%; height: 40px; margin-top: 10px; }
   .brand-copy h1 { font-size: 1.2rem; }
   .brand-copy p { font-size: .68rem; }
   .demo-badge { padding: 4px 10px; font-size: .7rem; }
+  .masthead { flex-wrap: wrap; }
+  .account-button { min-height: 40px; padding: 4px 12px; font-size: .75rem; }
   .tasks-title { margin-bottom: 4px; font-size: .68rem; }
   .tasks-list { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
   .task-row.is-active { order: -1; }

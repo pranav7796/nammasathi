@@ -1,8 +1,17 @@
 # Deployment
 
-The public deployment is a demo with mock shops, plus the Swiggy sign-in callback. It cannot reach
-a Swiggy tool: `PUBLIC_DEPLOYMENT=true` refuses to start unless `COMMERCE_BACKEND=mock` and every
-live switch is off. A real account stays on the owner's own machine, behind the local-only check.
+The public deployment has three levels, each set by configuration:
+
+| Level | Adds | Reaches Swiggy? |
+|---|---|---|
+| Demo | Mock shops for anyone, no sign-up | No |
+| Accounts | `DATABASE_URL` and `TOKEN_ENCRYPTION_KEYS`: sign-up, sign-in, account management | No |
+| Live | `MULTI_USER_LIVE`, after Swiggy grants access: approved users connect their own Swiggy | Yes, per user |
+
+`PUBLIC_DEPLOYMENT=true` refuses to start with anything live unless `MULTI_USER_LIVE` is on, along
+with Postgres over TLS, an encryption key, and an HTTPS address. Visitors who are not signed in always
+get the labelled mock shops. To go further than Demo, follow
+[production-activation.md](production-activation.md).
 
 ## Host
 
@@ -42,14 +51,12 @@ Render either way.
 | `GET /auth/status` | Whether this browser is connected |
 | `POST /auth/logout` | Forgets the token here and logs out at Swiggy |
 
-The server keeps no access log, because the callback's address holds a one-time code. Tokens stay
-in memory and are lost on restart.
+The server keeps no access log, because the callback's address holds a one-time code. Without a
+database, tokens stay in memory and nothing uses them. With `MULTI_USER_LIVE`, only a signed-in,
+approved person can start this flow, and the token is encrypted and stored for that person alone.
 
 **What this does and does not do.** Swiggy allowlists redirect URIs exact-match, so a real sign-in
-cannot complete until Swiggy adds this one. Until then the code is tested against a stand-in
-server. After a sign-in the page says that the demo still uses mock shops: using that token for
-live ordering per user is not built, and needs per-user carts, journals, and limits. Build that
-against staging once Swiggy grants it.
+cannot complete until Swiggy adds this one. Until then the code is tested against a stand-in.
 
 ## Run the same image locally
 
@@ -60,3 +67,12 @@ docker run --rm -p 8000:8000 -e PUBLIC_DEPLOYMENT=true \
 ```
 
 Without `GNANI_API_KEY` the replies appear as text with a note that the voice is unavailable.
+
+## Try the multi-user product without Swiggy
+
+```bash
+uv run python scripts/e2e_multi_user.py --serve   # by hand, at http://localhost:18791
+uv run --with playwright python scripts/e2e_multi_user.py   # the whole journey in a browser
+```
+
+Both use the stand-in Swiggy, and the page says "Swiggy test data". Nothing reaches real Swiggy.

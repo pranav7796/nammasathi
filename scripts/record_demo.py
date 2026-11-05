@@ -126,7 +126,8 @@ async def record(args: argparse.Namespace, workdir: Path) -> None:
             executable_path=args.chromium,
             args=["--autoplay-policy=no-user-gesture-required", "--mute-audio"],
         )
-        page = await browser.new_page(viewport={"width": 1280, "height": 800})
+        # The captions are injected styles, which the page's own security policy would block.
+        page = await browser.new_page(viewport={"width": 1280, "height": 800}, bypass_csp=True)
         cdp = await page.context.new_cdp_session(page)
 
         async def on_frame(event: dict[str, object]) -> None:

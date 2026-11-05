@@ -6,6 +6,8 @@ the Swiggy app can say what really happened, so settling one is a deliberate act
     uv run python -m app.order_admin status
     uv run python -m app.order_admin resolve <attempt_id> placed --order-id <id>
     uv run python -m app.order_admin resolve <attempt_id> not-placed
+
+On a hosted server each person has their own journal: add --user someone@example.com first.
 """
 
 from __future__ import annotations
@@ -16,21 +18,34 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.accounts.db import connect
+from app.accounts.journal import DatabaseOrderJournal
+from app.accounts.store import AccountStore
 from app.commerce.order_journal import (
     AttemptStatus,
     FileOrderJournal,
+    OrderJournal,
     resolve_attempt,
 )
 from app.config import load_settings
 
 
-def _journal() -> FileOrderJournal:
+def _journal(email: str | None = None) -> OrderJournal:
     load_dotenv()
-    return FileOrderJournal(Path(load_settings().order_journal_path))
+    settings = load_settings()
+    if email is None:
+        return FileOrderJournal(Path(settings.order_journal_path))
+    if not settings.database_url:
+        raise SystemExit("DATABASE_URL is not set.")
+    database = connect(settings.database_url)
+    user = AccountStore(database).user_by_email(email)
+    if user is None:
+        raise SystemExit("No account with that email.")
+    return DatabaseOrderJournal(database, user.id)
 
 
-def status() -> int:
-    attempts = _journal().attempts()
+def status(email: str | None = None) -> int:
+    attempts = _journal(email).attempts()
     if not attempts:
         print("No checkout attempts recorded.")
         return 0
@@ -43,8 +58,8 @@ def status() -> int:
     return 0
 
 
-def resolve(attempt_id: str, outcome: str, order_id: str | None) -> int:
-    journal = _journal()
+def resolve(attempt_id: str, outcome: str, order_id: str | None, email: str | None = None) -> int:
+    journal = _journal(email)
     attempt = next((item for item in journal.attempts() if item.attempt_id == attempt_id), None)
     if attempt is None:
         print("No such attempt.")
@@ -65,6 +80,7 @@ def resolve(attempt_id: str, outcome: str, order_id: str | None) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Namma Saathi order attempt journal")
+    parser.add_argument("--user", help="the account, on a hosted server")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     resolver = commands.add_parser("resolve")
@@ -73,8 +89,8 @@ def main() -> None:
     resolver.add_argument("--order-id")
     args = parser.parse_args()
     if args.command == "status":
-        sys.exit(status())
-    sys.exit(resolve(args.attempt_id, args.outcome, args.order_id))
+        sys.exit(status(args.user))
+    sys.exit(resolve(args.attempt_id, args.outcome, args.order_id, args.user))
 
 
 if __name__ == "__main__":

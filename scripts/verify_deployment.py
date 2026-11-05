@@ -31,6 +31,21 @@ def main(base: str) -> int:
         callback = health.get("oauth_callback")
         check("callback uses this address", callback == f"{base}/auth/callback", str(callback))
         check("page loads", client.get(f"{base}/").status_code == 200)
+        ready = client.get(f"{base}/readyz")
+        body = ready.json()
+        check("database reachable", ready.status_code == 200, str(body.get("database")))
+        print(f"      live Swiggy open: {body.get('multi_user_live')}")
+        account = client.get(f"{base}/api/account/me").json()
+        print(f"      accounts enabled: {account.get('enabled')}")
+        page = client.get(f"{base}/")
+        check(
+            "security policy is set",
+            "script-src 'self'" in page.headers.get("content-security-policy", ""),
+        )
+        check(
+            "HSTS is set",
+            "max-age" in page.headers.get("strict-transport-security", ""),
+        )
 
         forged = client.get(f"{base}/auth/callback", params={"code": "x", "state": "forged"})
         check("callback exists and refuses a forged state", forged.status_code == 400)

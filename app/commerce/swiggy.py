@@ -357,6 +357,15 @@ class KeyringTokenStorage:
         await self._set("oauth-client", client_info.model_dump_json())
 
 
+class DelegatedLogin(httpx2.Auth):
+    """One user's login on a hosted server. See app/accounts/swiggy_tokens.py."""
+
+    login_lost: bool = False
+
+    async def ensure_fresh(self) -> None:
+        raise NotImplementedError
+
+
 @dataclass
 class _ToolRequest:
     name: str
@@ -382,18 +391,25 @@ class SwiggyMcpClient:
         self,
         *,
         endpoint: str = SWIGGY_MCP_URL,
-        redirect_uri: str,
-        storage: TokenStorage,
-        redirect_handler: Callable[[str], Awaitable[None]],
-        callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]],
+        redirect_uri: str = OAUTH_REDIRECT_URI,
+        storage: TokenStorage | None = None,
+        redirect_handler: Callable[[str], Awaitable[None]] | None = None,
+        callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]] | None = None,
         allow_real_checkout: bool = False,
         allow_cart_writes: bool | None = None,
+        delegated_auth: DelegatedLogin | None = None,
+        http_transport: httpx2.AsyncBaseTransport | None = None,
+        user_label: str = "",
     ) -> None:
+        """Local mode logs in through the SDK; hosted mode passes one user's `delegated_auth`."""
         if endpoint not in self.allowed_endpoints:
             raise ValueError(f"Swiggy endpoint must be one of {sorted(self.allowed_endpoints)}")
         if redirect_uri != OAUTH_REDIRECT_URI:
             raise ValueError("Local Swiggy OAuth redirect must be http://localhost")
         self.endpoint = endpoint
+        self._delegated = delegated_auth
+        self._http_transport = http_transport
+        self._user_label = user_label
         self.allow_real_checkout = allow_real_checkout
         self.allow_cart_writes = (
             allow_real_checkout if allow_cart_writes is None else (allow_cart_writes)
@@ -405,6 +421,12 @@ class SwiggyMcpClient:
         self._worker: asyncio.Task[None] | None = None
         self._worker_loop: asyncio.AbstractEventLoop | None = None
         self._rate_limited_until = 0.0
+        if delegated_auth is not None:
+            self._http_auth: httpx2.Auth = delegated_auth
+            return
+        if storage is None or redirect_handler is None or callback_handler is None:
+            raise ValueError("A local Swiggy login needs storage and both handlers")
+        handle_callback = callback_handler
         metadata = OAuthClientMetadata(
             client_name="Namma Saathi",
             redirect_uris=[_ANY_URL.validate_python(redirect_uri)],
@@ -418,8 +440,9 @@ class SwiggyMcpClient:
             metadata,
             storage,
             redirect_handler=redirect_handler,
-            callback_handler=lambda: run_authorization_callback_safely(callback_handler),
+            callback_handler=lambda: run_authorization_callback_safely(handle_callback),
         )
+        self._http_auth = self._oauth
 
     async def aclose(self) -> None:
         """Close the MCP session owned by the worker task, if it is running."""
@@ -454,7 +477,12 @@ class SwiggyMcpClient:
         current: _ToolRequest | None = None
         try:
             async with (
-                httpx2.AsyncClient(auth=self._oauth, timeout=_HTTP_TIMEOUT) as client,
+                httpx2.AsyncClient(
+                    auth=self._http_auth,
+                    timeout=_HTTP_TIMEOUT,
+                    transport=self._http_transport,
+                    event_hooks={"response": [self._watch_rate_limit]},
+                ) as client,
                 streamable_http_client(self.endpoint, http_client=client) as (
                     read_stream,
                     write_stream,
@@ -507,6 +535,9 @@ class SwiggyMcpClient:
                 request.future.set_exception(error)
 
     async def _check_token_fresh(self) -> None:
+        if self._delegated is not None:
+            await self._delegated.ensure_fresh()
+            return
         if not isinstance(self._storage, KeyringTokenStorage):
             return
         expires_at = await self._storage.token_expires_at()
@@ -553,9 +584,16 @@ class SwiggyMcpClient:
         status = "error"
         timeout = _CHECKOUT_TIMEOUT_SECONDS if name == "checkout" else _TOOL_TIMEOUT_SECONDS
         try:
-            with stage("provider"):
-                result = await self._send(name, arguments, timeout)
-            data, message = _parse_result(name, result)
+            try:
+                with stage("provider"):
+                    result = await self._send(name, arguments, timeout)
+                data, message = _parse_result(name, result)
+            except Exception as exc:
+                # Swiggy refused this user's login, so it did not act on this call, even checkout.
+                if self._delegated is not None and self._delegated.login_lost:
+                    status = "login_lost"
+                    raise CommerceAuthRequired("Swiggy login is missing or expired.") from exc
+                raise
             status = "ok"
             return data, message, _result_text(result)
         except SwiggyRejected:
@@ -596,7 +634,18 @@ class SwiggyMcpClient:
                 correlation_id=correlation_id,
                 status=status,
                 duration_ms=round((time.perf_counter() - started) * 1000),
+                user_id_hash=self._user_label,
             )
+
+    async def _watch_rate_limit(self, response: httpx2.Response) -> None:
+        """The SDK turns an HTTP 429 into a generic error, so Retry-After must be read here."""
+        if response.status_code != 429:
+            return
+        try:
+            wait = max(float(response.headers.get("retry-after", "")), 0.0)
+        except ValueError:
+            wait = _DEFAULT_RETRY_AFTER_SECONDS
+        self._rate_limited_until = time.monotonic() + wait
 
     def _note_rate_limit(self, error: BaseException) -> None:
         wait = _retry_after_seconds(error)

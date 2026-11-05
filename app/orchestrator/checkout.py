@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.commerce.base import (
@@ -60,6 +61,7 @@ _TOTAL_TOLERANCE_INR = Decimal(1)  # the bill rounds to whole rupees, order tota
 class CheckoutPolicy:
     max_total_inr: Decimal | None = None
     max_orders: int | None = None  # orders placed or unresolved, ever, per journal
+    max_orders_per_day: int | None = None  # per journal, by UTC day; a hosted server's limit
     reconcile_delays: tuple[float, ...] = (0.0,)
     rejection_delays: tuple[float, ...] = (0.0,)
     verify_delays: tuple[float, ...] = (0.0,)
@@ -91,6 +93,14 @@ def attempt_guard(policy: CheckoutPolicy, total: Decimal) -> Callable[[list[Orde
         used = sum(attempt.status is AttemptStatus.PLACED for attempt in existing)
         if policy.max_orders is not None and used >= policy.max_orders:
             raise AttemptRefused("order_limit")
+        if policy.max_orders_per_day is not None:
+            today = datetime.now(UTC).date().isoformat()
+            placed_today = sum(
+                attempt.status is AttemptStatus.PLACED and attempt.created_at[:10] == today
+                for attempt in existing
+            )
+            if placed_today >= policy.max_orders_per_day:
+                raise AttemptRefused("order_limit")
         if policy.max_total_inr is not None and total > policy.max_total_inr:
             raise AttemptRefused("order_limit")
 

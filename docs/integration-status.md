@@ -20,6 +20,23 @@ read-only. **Write** verified against real Swiggy with a real change. **Blocked*
 | Authoritative verification | Read: order history; order check Mock | Read: order history; order check Mock | Mock; there is no booking history |
 | Failure handling | Mock, plus one live failure handled | Mock | Mock |
 
+## Hosted, per-user path
+
+Everything in this table has run only against the stand-in, `tests/fake_swiggy.py`, on SQLite and
+Postgres, through the real adapters, the real MCP SDK, and a real browser. It proves our side, not
+Swiggy's.
+
+| Step | Status |
+|---|---|
+| Sign-up, sign-in, password change and reset, delete, export | Tested |
+| Per-user Swiggy sign-in, encrypted tokens, refresh and rotation, disconnect | Stand-in only |
+| Isolation: tokens, addresses, carts, orders, journals, limits, conversations | Stand-in only |
+| Grocery, food, and booking journeys, with order verification | Stand-in only |
+| Lost replies, refusals, 401, 419, 429, revoked login | Stand-in only |
+| Sending real email | **Not run**: only a fake mailer |
+| Real Swiggy staging or production | **Blocked**: needs Swiggy |
+| Deployed with accounts on | **Needs the owner**: database and keys. See [production-activation.md](production-activation.md) |
+
 ## Why execution is blocked
 
 Swiggy's access page says developers get staging through allowlisting during review, and production
@@ -33,4 +50,5 @@ order. `ALLOW_REAL_CHECKOUT` and `ALLOW_REAL_BOOKING` stay off until then.
   `checkout` have never run, so they may differ from the docs. Dineout's search and slots already
   did. The code stops rather than guesses when a response does not match.
 - The fixed Instamart cancel, against the live cart.
-- The hosted Swiggy sign-in, against real Swiggy. It is tested against a stand-in server only.
+- The hosted Swiggy sign-in and token refresh, against real Swiggy. They have run against a stand-in
+  only. [production-activation.md](production-activation.md) lists each assumption and what finds it.

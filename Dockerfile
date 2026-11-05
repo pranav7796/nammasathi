@@ -1,4 +1,4 @@
-# The public demo: mock shops only. PUBLIC_DEPLOYMENT=true refuses anything else at startup.
+# A public server: mock shops, unless MULTI_USER_LIVE and its requirements are met at startup.
 FROM python:3.12-slim
 
 ENV UV_LINK_MODE=copy PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1

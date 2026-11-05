@@ -38,6 +38,7 @@ _ALLOWED_FIELDS = frozenset(
         "to_state",
         "tool",
         "turn_event",
+        "user_id_hash",
         "verified",
     }
 )

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Privacy · Namma Saathi</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body class="plain-page">
+    <h1>Privacy</h1>
+    <p>Namma Saathi is a voice assistant for groceries, meals, and table bookings. This page says what it keeps and why, in plain words.</p>
+
+    <h2>What we keep</h2>
+    <ul>
+      <li><strong>Your email address</strong> and a scrambled form of your password, so you can sign in. Nobody can read the password back.</li>
+      <li><strong>Your Swiggy connection</strong>, if you choose to connect: an encrypted token that lets Saathi act for you. We never see your Swiggy OTP. Saathi uses this token only for you.</li>
+      <li><strong>A record of each real order or booking attempt</strong>: item names, total, order numbers, status, and time. It stops Saathi from ordering twice by accident.</li>
+    </ul>
+
+    <h2>What we do not keep</h2>
+    <ul>
+      <li>Your recordings or what you said. They are used for that one turn and not saved.</li>
+      <li>Your delivery addresses. They are read from Swiggy when needed and held only during a conversation.</li>
+      <li>Conversations. They disappear after 30 minutes without use, or when the server restarts.</li>
+    </ul>
+
+    <h2>Who else handles your data</h2>
+    <ul>
+      <li><strong>Gnani</strong> turns your speech into text, and replies into speech. A reply read aloud can include your cart and delivery address.</li>
+      <li><strong>Groq or Google Gemini</strong> work out what you asked for from the text of what you said. They also see names of items and restaurants you are choosing between. They may process this outside India. They are not sent your address or your password.</li>
+      <li><strong>Swiggy</strong>, if you connect it: your Swiggy account stays with Swiggy, under Swiggy's own privacy policy.</li>
+      <li>The companies hosting this site and its database, which may be outside India.</li>
+    </ul>
+    <p>We do not sell your data or use it for advertising or for training AI models.</p>
+
+    <h2>Your choices</h2>
+    <ul>
+      <li><strong>Try it without an account.</strong> The demo shops need no sign-up, and no real order is placed.</li>
+      <li><strong>Disconnect Swiggy</strong> at any time from your account. That also ends the session at Swiggy.</li>
+      <li><strong>Download or delete your data</strong> from your account. Deleting removes your account, your Swiggy connection, and your order records here. It does not change anything in your Swiggy account or any order already placed; for those, use the Swiggy app.</li>
+    </ul>
+
+    <h2>Real orders</h2>
+    <p>Saathi reads back the exact items, total, address, and payment method, and acts only after you say yes. Cancellations and refunds are handled by Swiggy.</p>
+
+    <h2>Questions</h2>
+    <p>Write to {{contact}}.</p>
+    <p><a href="/">Back to Namma Saathi</a></p>
+  </body>
+</html>

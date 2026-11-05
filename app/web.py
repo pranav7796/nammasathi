@@ -1,15 +1,16 @@
-"""Same-origin browser API for the local voice assistant."""
+"""Same-origin browser API for the voice assistant, on one machine or as a hosted service."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import html
 import logging
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -20,10 +21,14 @@ from urllib.parse import urlsplit
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.accounts.mailer import Mailer
+from app.accounts.routes import account_router
+from app.accounts.service import AccountService, SwiggyStub
+from app.accounts.store import User
 from app.assistant.orchestrator import Assistant, Reply, Workflow
 from app.assistant.router import Domain
 from app.assistant.workflows import OrderWorkflow
@@ -35,6 +40,7 @@ from app.commerce.base import (
     CommerceRejected,
     same_address_id,
 )
+from app.commerce.order_journal import OrderJournal
 from app.commerce.runtime import (
     checkout_policy,
     commerce_adapter,
@@ -64,16 +70,24 @@ from app.voice.presentation import response_text, speech_error_text
 
 MAX_AUDIO_BYTES = 12 * 1024 * 1024
 MAX_TYPED_CHARACTERS = 400
+MAX_JSON_BYTES = 64 * 1024
 DEFAULT_SESSION_TTL_SECONDS = 30 * 60
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOOPBACK_CLIENTS = frozenset({"127.0.0.1", "::1"})
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; "
+    "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+    "img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+)
 logger = logging.getLogger(__name__)
 
 
 class StartSessionRequest(BaseModel):
     language: Literal["kn-IN", "hi-IN", "en-IN"]
     address_id: str | None = None
+    live: bool = False  # the person's own Swiggy account; never assumed
 
 
 class TextTurnRequest(BaseModel):
@@ -94,7 +108,9 @@ class BrowserSession:
     language: str
     last_activity: float
     lock: asyncio.Lock
+    settings: Settings
     last_reply: str = ""
+    owner: str | None = None  # the signed-in user, who alone may use this conversation
 
     @property
     def runner(self) -> TextTurnRunner:
@@ -135,6 +151,8 @@ def create_app(
     tts_factory: TTSFactory | None = None,
     session_ttl_seconds: float = DEFAULT_SESSION_TTL_SECONDS,
     oauth_transport: httpx.AsyncBaseTransport | None = None,
+    mailer: Mailer | None = None,
+    swiggy_stub: SwiggyStub | None = None,
 ) -> FastAPI:
     """Create an isolated web app; factories make provider calls mockable in tests."""
     sessions: dict[str, BrowserSession] = {}
@@ -142,6 +160,8 @@ def create_app(
     extractor_lock = asyncio.Lock()
     default_extractor: IntentExtractor | None = None
     budget = DemoBudget()
+    user_budgets: dict[str, DemoBudget] = {}
+    live_conversation: dict[str, str] = {}  # user id -> their one live conversation
     shared_adapter: CommerceAdapter | None = None
     shared_food: dict[str, CommerceAdapter] = {}
     shared_dining: DiningAdapter | None = None
@@ -186,9 +206,18 @@ def create_app(
             )
         application.state.settings = runtime_settings
         application.state.sessions = sessions
+        service = (
+            AccountService.start(runtime_settings, mailer=mailer, stub=swiggy_stub)
+            if runtime_settings.accounts_enabled
+            else None
+        )
+        application.state.accounts = service
+        application.state.close_user_conversations = close_user_conversations
         log_event("app_started", mode=runtime_settings.commerce_backend)
         yield
         sessions.clear()
+        if service is not None:
+            await service.close()
         for client in (shared_adapter, shared_dining, *shared_food.values()):
             if isinstance(client, SwiggyMcpClient):
                 await client.aclose()
@@ -196,20 +225,111 @@ def create_app(
     application = FastAPI(title="Namma Saathi", lifespan=lifespan)
     application.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     application.include_router(oauth_router(oauth_transport))
+    application.include_router(account_router())
+
+    async def close_user_conversations(user_id: str) -> None:
+        """After sign-out, disconnect, or deletion nothing of this user's may keep running."""
+        async with sessions_lock:
+            for session_id, entry in list(sessions.items()):
+                if entry.owner == user_id:
+                    del sessions[session_id]
+        live_conversation.pop(user_id, None)
+        user_budgets.pop(user_id, None)
+        service = cast(AccountService | None, application.state.accounts)
+        if service is not None:
+            await service.drop_adapters(user_id)
 
     @application.middleware("http")
     async def local_only_for_real_account(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        """A real account sits behind this API, so accept only this machine's own browser."""
+        """One shared login sits behind this API, so accept only this machine's own browser.
+
+        With MULTI_USER_LIVE there is no shared login: each request acts only for its own user.
+        """
         runtime_settings = cast(Settings | None, getattr(request.app.state, "settings", None))
         if (
             runtime_settings is not None
             and runtime_settings.commerce_backend != "mock"
+            and not runtime_settings.multi_user_live
             and not _is_local_request(request)
         ):
             return JSONResponse(status_code=403, content={"detail": "Local access only."})
         return await call_next(request)
+
+    @application.middleware("http")
+    async def same_origin_writes_and_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Refuse cross-site writes, which would otherwise carry the sign-in cookie."""
+        runtime_settings = cast(Settings | None, getattr(request.app.state, "settings", None))
+        declared = request.headers.get("content-length", "0")
+        if (
+            request.url.path != "/api/session/turn"
+            and declared.isdigit()
+            and int(declared) > MAX_JSON_BYTES
+        ):
+            return JSONResponse(status_code=413, content={"detail": "That is too large."})
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and _cross_site(
+            request, runtime_settings
+        ):
+            log_event("request_refused", reason="cross_site")
+            return JSONResponse(status_code=403, content={"detail": "Cross-site request refused."})
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("X-Frame-Options", "DENY")
+        headers.setdefault("Referrer-Policy", "no-referrer")
+        headers.setdefault("Permissions-Policy", "microphone=(self), camera=(), geolocation=()")
+        if runtime_settings is not None and runtime_settings.public_base_url.startswith("https://"):
+            headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+        if request.url.path.startswith(("/api/", "/auth/")):
+            headers.setdefault("Cache-Control", "no-store")
+        return response
+
+    def accounts_of(request: Request) -> AccountService | None:
+        return cast(AccountService | None, getattr(request.app.state, "accounts", None))
+
+    async def signed_in(request: Request) -> User | None:
+        service = accounts_of(request)
+        return await service.current_user(request) if service is not None else None
+
+    async def owned_session(request: Request) -> tuple[str, BrowserSession]:
+        """A conversation, only for the person it belongs to. Others see it as not existing."""
+        session_id = _session_id(request)
+        entry = await _get_session(session_id, sessions, sessions_lock, session_ttl_seconds)
+        if entry.owner is not None:
+            user = await signed_in(request)
+            if user is None or user.id != entry.owner:
+                log_event("request_refused", reason="not_owner")
+                raise HTTPException(
+                    status_code=410,
+                    detail="This conversation expired. Start a new conversation to continue.",
+                )
+            multi_user = _get_settings(request).multi_user_live
+            if multi_user and entry.settings.commerce_backend == "swiggy" and not user.live_access:
+                # An operator's revoke takes effect on this person's very next turn.
+                async with sessions_lock:
+                    sessions.pop(session_id, None)
+                raise HTTPException(
+                    status_code=410, detail="Live Swiggy is no longer available on this account."
+                )
+        return session_id, entry
+
+    def spend_turn(entry: BrowserSession) -> None:
+        """Live users have their own allowance, so a busy demo can't lock them out. Demo turns
+        share one, whoever makes them, so extra sign-ups can't get around it."""
+        settings_now = entry.settings
+        if entry.owner is not None and settings_now.commerce_backend == "swiggy":
+            allowance = user_budgets.setdefault(entry.owner, DemoBudget())
+            if not allowance.spend(settings_now.user_daily_turn_limit):
+                raise HTTPException(
+                    status_code=429,
+                    detail="You have reached today's limit. Please try again tomorrow.",
+                )
+            return
+        spend_public_budget(settings_now)
 
     async def resolve_extractor() -> IntentExtractor:
         if extractor_factory is not None:
@@ -236,7 +356,7 @@ def create_app(
         timer: TurnTimer,
         text: str,
     ) -> dict[str, object]:
-        runtime_settings = _get_settings(request)
+        runtime_settings = entry.settings
         reply = await entry.assistant.turn(text, heard=_heard_readback(request, runtime_settings))
         return await _response_payload(
             entry,
@@ -254,22 +374,86 @@ def create_app(
         runtime_settings = _get_settings(request)
         return {
             "status": "ok",
-            "commerce_mode": runtime_settings.commerce_backend,
+            # What anyone gets without signing in. Mock unless this is one person's own machine.
+            "commerce_mode": (
+                "mock" if runtime_settings.multi_user_live else runtime_settings.commerce_backend
+            ),
             "public_deployment": runtime_settings.public_deployment,
             "oauth_callback": (
                 callback_url(runtime_settings) if runtime_settings.public_base_url else None
             ),
         }
 
+    @application.get("/readyz", include_in_schema=False)
+    async def readyz(request: Request) -> JSONResponse:
+        """Can this server reach its database? Kept apart so a slow database can't restart it."""
+        service = accounts_of(request)
+        live = _get_settings(request).multi_user_live
+        if service is None:
+            return JSONResponse({"status": "ok", "database": "none", "multi_user_live": live})
+        try:
+            await asyncio.to_thread(service.database.ping)
+        except Exception:
+            log_event("readiness", outcome="database_unreachable")
+            return JSONResponse(status_code=503, content={"status": "database_unreachable"})
+        return JSONResponse(
+            {"status": "ok", "database": service.database.dialect, "multi_user_live": live}
+        )
+
     @application.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    @application.get("/privacy", include_in_schema=False)
+    async def privacy(request: Request) -> HTMLResponse:
+        contact = _get_settings(request).support_email or "the person who runs this site"
+        page = (STATIC_DIR / "privacy.html").read_text(encoding="utf-8")
+        return HTMLResponse(page.replace("{{contact}}", html.escape(contact)))
+
+    async def live_for(request: Request) -> tuple[AccountService, User]:
+        """The caller's own account, if they may use it live. Refused otherwise, never mocked."""
+        service = accounts_of(request)
+        if service is None:
+            raise HTTPException(status_code=403, detail="Live Swiggy is not open on this site.")
+        user = await service.current_user(request)
+        refusal = await service.live_refusal(user)
+        if refusal is not None or user is None:
+            raise HTTPException(status_code=403, detail=refusal or "Sign in first.")
+        return service, user
+
+    def session_settings(runtime_settings: Settings) -> Settings:
+        """Without a live request, a multi-user server gives its mock shops, labelled as such."""
+        if runtime_settings.multi_user_live:
+            return replace(
+                runtime_settings,
+                commerce_backend="mock",
+                swiggy_live_access=False,
+                allow_real_checkout=False,
+                allow_swiggy_cart_writes=False,
+                allow_real_booking=False,
+            )
+        return runtime_settings
+
     @application.get("/api/addresses")
     async def list_addresses(request: Request) -> dict[str, object]:
+        wants_live = request.query_params.get("live") == "1"
         try:
-            addresses = await adapter_for(_get_settings(request)).get_addresses()
+            if wants_live:
+                service, user = await live_for(request)
+                effective = _get_settings(request)
+                addresses = await service.adapters(user.id).grocery.get_addresses()
+            else:
+                effective = session_settings(_get_settings(request))
+                addresses = await adapter_for(effective).get_addresses()
+        except CommerceAuthRequired as exc:
+            raise HTTPException(
+                status_code=409, detail="Your Swiggy connection has ended. Please connect again."
+            ) from exc
         except CommerceError as exc:
+            if wants_live:
+                raise HTTPException(
+                    status_code=503, detail="Could not read your Swiggy addresses just now."
+                ) from exc
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -278,11 +462,11 @@ def create_app(
                 ),
             ) from exc
         return {
-            "commerce_mode": _get_settings(request).commerce_backend,
-            "public_deployment": _get_settings(request).public_deployment,
+            "commerce_mode": effective.commerce_backend,
+            "swiggy_environment": _swiggy_environment(effective),
+            "public_deployment": effective.public_deployment,
             "checkout_enabled": (
-                _get_settings(request).commerce_backend == "mock"
-                or _get_settings(request).allow_real_checkout
+                effective.commerce_backend == "mock" or effective.allow_real_checkout
             ),
             "addresses": [
                 {"id": item.id, "label": item.label, "full_address": item.full_address}
@@ -292,7 +476,15 @@ def create_app(
 
     @application.post("/api/sessions")
     async def create_session(payload: StartSessionRequest, request: Request) -> dict[str, object]:
-        runtime_settings = _get_settings(request)
+        base_settings = _get_settings(request)
+        user = await signed_in(request)
+        service = accounts_of(request)
+        live_user: User | None = None
+        if payload.live:
+            service, live_user = await live_for(request)
+            runtime_settings = base_settings
+        else:
+            runtime_settings = session_settings(base_settings)
         if runtime_settings.public_deployment and len(sessions) >= (
             runtime_settings.public_max_sessions
         ):
@@ -300,23 +492,37 @@ def create_app(
                 _remove_expired_sessions(sessions, session_ttl_seconds)
             if len(sessions) >= runtime_settings.public_max_sessions:
                 raise HTTPException(status_code=429, detail="The demo is busy. Please try shortly.")
-        spend_public_budget(runtime_settings)
+        if live_user is None:
+            spend_public_budget(runtime_settings)
         try:
             extractor = await resolve_extractor()
-            grocery = adapter_for(runtime_settings)
+            if live_user is not None and service is not None:
+                adapters = service.adapters(live_user.id)
+                grocery: CommerceAdapter = adapters.grocery
+                journal: OrderJournal = service.journal(live_user.id)
+            else:
+                adapters = None
+                grocery = adapter_for(runtime_settings)
+                journal = order_journal(runtime_settings)
             address = _select_address(await grocery.get_addresses(), payload.address_id)
-            journal = order_journal(runtime_settings)
             policy = checkout_policy(runtime_settings)
 
             async def build(domain: Domain) -> Workflow:
                 if domain == "dining":
                     return DiningWorkflow(
-                        dining_for(runtime_settings),
+                        adapters.dining if adapters else dining_for(runtime_settings),
                         journal,
                         policy,
                         today=date.today(),
                     )
-                adapter = food_for(runtime_settings, address.id) if domain == "food" else grocery
+                if domain == "food":
+                    adapter = (
+                        adapters.food(address.id)
+                        if adapters
+                        else food_for(runtime_settings, address.id)
+                    )
+                else:
+                    adapter = grocery
                 return OrderWorkflow(
                     domain,
                     adapter,
@@ -340,6 +546,11 @@ def create_app(
         except IntentExtractionError as exc:
             raise HTTPException(status_code=503, detail=exc.user_message) from exc
         except CommerceAuthRequired as exc:
+            if live_user is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Your Swiggy connection has ended. Please connect again.",
+                ) from exc
             raise HTTPException(
                 status_code=503,
                 detail="Swiggy login has expired. Run `uv run python -m app.swiggy_auth`.",
@@ -363,10 +574,18 @@ def create_app(
             language=payload.language,
             last_activity=time.monotonic(),
             lock=asyncio.Lock(),
+            settings=runtime_settings,
+            owner=user.id if user else None,
         )
         async with sessions_lock:
             _remove_expired_sessions(sessions, session_ttl_seconds)
             sessions[session_id] = entry
+            if live_user is not None:
+                # A Swiggy account has one cart, so two live conversations would overwrite it.
+                earlier = live_conversation.get(live_user.id)
+                if earlier is not None:
+                    sessions.pop(earlier, None)
+                live_conversation[live_user.id] = session_id
         return await _response_payload(
             entry,
             reply,
@@ -377,14 +596,12 @@ def create_app(
 
     @application.get("/api/session")
     async def get_session(request: Request) -> dict[str, object]:
-        session_id = _session_id(request)
-        entry = await _get_session(session_id, sessions, sessions_lock, session_ttl_seconds)
-        return _session_payload(session_id, entry, _get_settings(request))
+        session_id, entry = await owned_session(request)
+        return _session_payload(session_id, entry, entry.settings)
 
     @application.post("/api/session/turn")
     async def upload_turn(request: Request) -> dict[str, object]:
-        session_id = _session_id(request)
-        entry = await _get_session(session_id, sessions, sessions_lock, session_ttl_seconds)
+        session_id, entry = await owned_session(request)
         requested_language = request.query_params.get("language")
         if requested_language is not None and requested_language not in SUPPORTED_LANGUAGES:
             raise HTTPException(status_code=422, detail="Choose Kannada, Hindi, or English.")
@@ -402,8 +619,8 @@ def create_app(
                 status_code=415, detail="Upload a WAV recording from the microphone."
             )
         audio_bytes = await _read_bounded_audio(request)
-        runtime_settings = _get_settings(request)
-        spend_public_budget(runtime_settings)
+        runtime_settings = entry.settings
+        spend_turn(entry)
 
         async with entry.lock:
             entry.last_activity = time.monotonic()
@@ -427,14 +644,13 @@ def create_app(
     @application.post("/api/session/text")
     async def typed_turn(payload: TextTurnRequest, request: Request) -> dict[str, object]:
         """The same turn as a spoken one, minus speech recognition. The same approvals apply."""
-        session_id = _session_id(request)
-        entry = await _get_session(session_id, sessions, sessions_lock, session_ttl_seconds)
+        session_id, entry = await owned_session(request)
         text = payload.text.strip()
         if not text:
             raise HTTPException(status_code=422, detail="Type what you would like.")
         if len(text) > MAX_TYPED_CHARACTERS:
             raise HTTPException(status_code=413, detail="Please keep it shorter.")
-        spend_public_budget(_get_settings(request))
+        spend_turn(entry)
         async with entry.lock:
             entry.last_activity = time.monotonic()
             timer = begin_turn()
@@ -450,10 +666,9 @@ def create_app(
     async def session_action(
         payload: SessionActionRequest, request: Request
     ) -> dict[str, object] | JSONResponse:
-        session_id = _session_id(request)
-        entry = await _get_session(session_id, sessions, sessions_lock, session_ttl_seconds)
-        runtime_settings = _get_settings(request)
-        spend_public_budget(runtime_settings)
+        session_id, entry = await owned_session(request)
+        runtime_settings = entry.settings
+        spend_turn(entry)
         async with entry.lock:
             entry.last_activity = time.monotonic()
             begin_turn()
@@ -525,6 +740,19 @@ async def _run_action(action: Awaitable[Reply]) -> Reply:
         ) from exc
 
 
+def _cross_site(request: Request, settings: Settings | None) -> bool:
+    """Browsers send Origin on cross-site writes. Requests with neither header carry no risk here,
+    because SameSite=Lax keeps the cookie off a cross-site form post in any case."""
+    if request.headers.get("sec-fetch-site", "") == "cross-site":
+        return True
+    origin = request.headers.get("origin")
+    if not origin:
+        return False
+    if settings is not None and settings.public_base_url:
+        return origin != settings.public_base_url.rstrip("/")
+    return origin != f"{request.url.scheme}://{request.headers.get('host', '')}"
+
+
 def _is_local_request(request: Request) -> bool:
     client = request.client.host if request.client else ""
     host_header = request.headers.get("host", "")
@@ -576,6 +804,12 @@ def _default_tts_factory(settings: Settings, language: str) -> TimbreTTS:
         speed=settings.gnani_tts_speed,
         timeout=settings.gnani_timeout_seconds,
     )
+
+
+def _swiggy_environment(settings: Settings) -> str:
+    if settings.commerce_backend != "swiggy":
+        return ""
+    return "staging" if "staging" in settings.swiggy_mcp_url else "production"
 
 
 def _session_payload(
@@ -641,6 +875,7 @@ def _session_payload(
             for task in entry.assistant.tasks()
         ],
         "public_deployment": settings.public_deployment,
+        "swiggy_environment": _swiggy_environment(settings),
         "last_reply": entry.last_reply,
         "tts_language": entry.language,
     }

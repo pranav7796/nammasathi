@@ -16,7 +16,8 @@ for you. A yes only ever applies to what Saathi just read back.
 
 > **Project status:** all three journeys work end to end on built-in mock shops, with real speech and
 > a real LLM. **No real order or booking has been placed.** Live Swiggy access is limited to what is
-> listed under [Status](#status), and Swiggy has not granted production access.
+> listed under [Status](#status), and Swiggy has not granted production access. Accounts and per-user
+> Swiggy connections are built and tested against a stand-in Swiggy, not yet against the real one.
 
 ## Why it is built this way
 
@@ -59,8 +60,10 @@ flowchart TD
   all real actions until a person settles it.
 - **Results are worded truthfully.** A demo is never called real, a real order is never called a
   demo, and an unverified order is never called verified.
-- **Real actions are off by default.** Each has its own switch, and the public deployment refuses to
-  start with any of them on.
+- **Real actions are off by default.** Each has its own switch. A public server refuses to start with
+  any of them on, unless it has per-user accounts, encrypted tokens, and a durable database.
+- **People are kept apart.** Each person has their own encrypted Swiggy token, cart, order journal,
+  and limits. One person's uncertain order blocks only that person.
 
 ## Quick start
 
@@ -89,7 +92,8 @@ Checked on 5 November 2026. [docs/integration-status.md](docs/integration-status
 | Swiggy Dineout | Works | Search and slots verified | Not applicable | Never run |
 
 Swiggy has not confirmed that a personal app may place real orders, so execution stays off until it
-does. See [docs/first-real-order.md](docs/first-real-order.md) for the gated procedure.
+does. See [docs/first-real-order.md](docs/first-real-order.md) for the gated procedure, and
+[docs/production-activation.md](docs/production-activation.md) for the day access arrives.
 
 ### Speed
 
@@ -120,6 +124,7 @@ Add `?timings=1` to the page address to see these for each turn.
 ## Repository layout
 
 ```text
+app/accounts/       sign-in, encrypted per-user Swiggy tokens, per-user journal, database
 app/assistant/      one assistant over all capabilities: routing, task switching
 app/orchestrator/   the order engine for groceries and food: state machine, checkout
 app/dining/         table booking: its own state machine and workflow
@@ -128,8 +133,9 @@ app/food/           Swiggy Food adapter and mock
 app/llm/            intent schema, provider chain, scripted fallback
 app/voice/          Gnani speech, and every phrase Saathi says in three languages
 app/static/         the browser page
-scripts/            record a demo, verify a deployment
-docs/               status, deployment, demo script, Swiggy notes
+scripts/            record a demo, verify a deployment, drive the whole product in a browser
+tests/fake_swiggy.py  a stand-in Swiggy: OAuth and MCP, with separate state per account
+docs/               status, deployment, activation, demo script, Swiggy notes
 ```
 
 ## Commands
@@ -165,7 +171,11 @@ Everything real is off unless switched on. [.env.example](.env.example) lists ev
 | `REAL_ORDER_LIMIT` | `1` | Real orders and bookings allowed before refusing more |
 | `LLM_PRIMARY` | `groq` | Which LLM goes first: `groq` or `gemini` |
 | `DEMO_UNDERSTANDING` | `llm` | `fallback` or `scripted` add simple rules, in mock mode only |
-| `PUBLIC_DEPLOYMENT` | `false` | Public mode: mock shops only, with a daily usage cap |
+| `PUBLIC_DEPLOYMENT` | `false` | Public mode: mock shops only unless `MULTI_USER_LIVE`, with a daily usage cap |
+| `DATABASE_URL` | none | Turns accounts on. Postgres in production, `sqlite:///path` locally |
+| `TOKEN_ENCRYPTION_KEYS` | none | Encrypts stored Swiggy tokens; required with a database |
+| `MULTI_USER_LIVE` | `false` | Real Swiggy for signed-in, approved users. Everyone else gets labelled mock shops |
+| `REAL_ORDER_DAILY_LIMIT` | none | Real orders and bookings per person per day |
 
 ## Known limitations
 
@@ -178,18 +188,21 @@ Everything real is off unless switched on. [.env.example](.env.example) lists ev
 - **Payment:** cash on delivery only.
 - **Voice:** tested with synthesized speech, not yet with people at a microphone. Kannada and Hindi
   phrases need review by native speakers. Hinglish goes through `hi-IN`.
-- **Sessions:** in memory, so a restart loses the conversation but not the journal. A real account
-  means one user, one process, on this machine.
+- **Sessions:** in memory, so a restart loses the conversation but not the journal. One server
+  process only. See [docs/production-activation.md](docs/production-activation.md#known-limits).
 - **Speed:** measured with real services on 5 November 2026, a spoken turn usually took 2 to 4 seconds
   when Groq answered and about 1 second for a yes, which skips the LLM. A speech recognition retry
   can add a few seconds. Groq's free tier rate-limits
   quickly, and Gemini then takes 5 to 13 seconds. An unclear real checkout adds about 30 seconds.
-- **Hosted demo:** mock shops only. The hosted Swiggy sign-in stops at the callback and has only run
-  against a stand-in server; live ordering per hosted user is not built.
+- **Hosted live use:** built, but only ever run against the stand-in Swiggy. The deployed demo stays
+  on mock shops until `MULTI_USER_LIVE` is set, after Swiggy grants access. No outside security
+  review has been done.
 
 ## Learn more
 
 - [DESIGN.md](DESIGN.md): product scope, safety invariants, and architecture (see §16)
+- [docs/production-activation.md](docs/production-activation.md): the checklist for the day Swiggy
+  grants access
 - [docs/integration-status.md](docs/integration-status.md): what is mocked, read-only, or blocked
 - [docs/swiggy-integration-notes.md](docs/swiggy-integration-notes.md): verified Swiggy behaviour
 - [docs/demo-script.md](docs/demo-script.md): the demo, with recovery steps and checklists

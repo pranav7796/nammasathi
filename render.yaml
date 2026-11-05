@@ -1,4 +1,6 @@
 # A public demo with mock shops, on Render's free plan. See docs/deployment.md.
+# To add accounts, set DATABASE_URL, TOKEN_ENCRYPTION_KEYS, and SUPPORT_EMAIL in the dashboard.
+# Going live on Swiggy is a separate step: docs/production-activation.md.
 services:
   - type: web
     name: namma-saathi

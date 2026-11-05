@@ -104,6 +104,7 @@ def checkout_policy(settings: Settings) -> CheckoutPolicy:
     return CheckoutPolicy(
         max_total_inr=settings.max_real_order_inr,
         max_orders=settings.real_order_limit,
+        max_orders_per_day=settings.real_order_daily_limit,
         reconcile_delays=REAL_RECONCILE_DELAYS,
         rejection_delays=REAL_REJECTION_DELAYS,
         verify_delays=REAL_VERIFY_DELAYS,

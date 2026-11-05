@@ -3,6 +3,16 @@ on: [push, pull_request]
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: saathi_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -11,6 +21,8 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pyright
       - run: uv run pytest
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/saathi_test
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import cast
 
+import httpx2
 from mcp.client.auth import AuthorizationCodeResult
 from mcp.client.auth.oauth2 import TokenStorage
 
@@ -38,8 +39,10 @@ from app.commerce.base import (
     Variant,
 )
 from app.commerce.swiggy import (
+    OAUTH_REDIRECT_URI,
     SWIGGY_MCP_URL,
     SWIGGY_STAGING_MCP_URL,
+    DelegatedLogin,
     SwiggyMcpClient,
     _list,  # pyright: ignore[reportPrivateUsage]
     _money,  # pyright: ignore[reportPrivateUsage]
@@ -95,12 +98,15 @@ class SwiggyFood(SwiggyMcpClient):
         *,
         address_id: str,
         endpoint: str = SWIGGY_FOOD_URL,
-        redirect_uri: str,
-        storage: TokenStorage,
-        redirect_handler: Callable[[str], Awaitable[None]],
-        callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]],
+        redirect_uri: str = OAUTH_REDIRECT_URI,
+        storage: TokenStorage | None = None,
+        redirect_handler: Callable[[str], Awaitable[None]] | None = None,
+        callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]] | None = None,
         allow_real_checkout: bool = False,
         allow_cart_writes: bool = False,
+        delegated_auth: DelegatedLogin | None = None,
+        http_transport: httpx2.AsyncBaseTransport | None = None,
+        user_label: str = "",
     ) -> None:
         super().__init__(
             endpoint=endpoint,
@@ -110,6 +116,9 @@ class SwiggyFood(SwiggyMcpClient):
             callback_handler=callback_handler,
             allow_real_checkout=allow_real_checkout,
             allow_cart_writes=allow_cart_writes,
+            delegated_auth=delegated_auth,
+            http_transport=http_transport,
+            user_label=user_label,
         )
         self.address_id = address_id
         self._dishes: dict[str, _Dish] = {}

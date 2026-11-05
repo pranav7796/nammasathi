@@ -11,9 +11,10 @@
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Baloo+Tamma+2:wght@600;700&family=Noto+Sans:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;500;700&family=Noto+Sans+Kannada:wght@400;500;700&display=swap">
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/app.js" defer></script>
+    <script src="/static/account.js" defer></script>
   </head>
   <body>
-    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <svg class="icon-sprite" width="0" height="0" aria-hidden="true">
       <symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3" fill="currentColor"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M8.5 21.5h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
       <symbol id="icon-basket" viewBox="0 0 24 24"><path d="M3.5 10h17l-1.8 9.5a1.5 1.5 0 0 1-1.5 1.2H6.8a1.5 1.5 0 0 1-1.5-1.2zM8 10l3-6.500M16 10l-3-6.500" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="icon-meal" viewBox="0 0 24 24"><path d="M3 12h18a9 9 0 0 1-18 0zM7 8c0-2 2-2 2-4M12 8c0-2 2-2 2-4M17 8c0-2 2-2 2-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -24,9 +25,11 @@
         <div class="brand-mark" aria-hidden="true">ಸ</div>
         <div class="brand-copy"><h1>Namma Saathi</h1><p>Your personal AI for everyday life</p></div>
         <p id="commerce-badge" class="demo-badge">Demo order</p>
+        <button id="account-button" class="account-button" type="button" hidden>Sign in</button>
       </header>
 
       <p id="error-message" class="error-message" role="alert" hidden></p>
+      <p id="connection-notice" class="scripted-note" role="status" hidden>Your Swiggy account is not connected. <button id="connection-notice-open" class="text-button" type="button">Connect it</button></p>
       <p id="scripted-note" class="scripted-note" role="status" hidden>Mock mode, scripted understanding: no LLM was used for this turn.</p>
 
       <section class="home-panel" aria-labelledby="start-heading">
@@ -41,6 +44,10 @@
           </ul>
         </div>
         <div class="start-card">
+          <div id="mode-choice" class="mode-choice" role="group" aria-label="Where should Saathi shop?" hidden>
+            <button id="mode-live" type="button" class="mode-option" aria-pressed="false"><strong>My Swiggy</strong><small id="mode-live-detail">Real items and prices. Real orders, only after your yes.</small></button>
+            <button id="mode-demo" type="button" class="mode-option" aria-pressed="true"><strong>Demo shops</strong><small>Practice. Nothing is real.</small></button>
+          </div>
           <p class="field-title" id="language-title">Which language will you speak?</p>
           <div id="language-choices" class="language-choices" role="group" aria-labelledby="language-title">
             <button type="button" class="language-choice" data-lang="kn-IN" aria-pressed="true"><span lang="kn">ಕನ್ನಡ</span><small>Kannada</small></button>
@@ -159,5 +166,104 @@
       <p id="page-status" class="page-status" role="status" aria-live="polite"></p>
       <p id="timings" class="small-note timings" hidden></p>
     </main>
+
+    <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-title">
+      <div class="account-head">
+        <h2 id="account-title">Your account</h2>
+        <button id="account-close" class="text-button" type="button">Close</button>
+      </div>
+      <p id="account-message" class="account-message" role="status" hidden></p>
+
+      <section id="account-view-signin" hidden>
+        <form id="signin-form" class="account-form">
+          <label for="signin-email">Email</label>
+          <input id="signin-email" name="email" type="email" autocomplete="email" required>
+          <label for="signin-password">Password</label>
+          <input id="signin-password" name="password" type="password" autocomplete="current-password" required>
+          <button class="account-primary" type="submit">Sign in</button>
+        </form>
+        <p class="account-links">
+          <button id="register-open" class="text-button" type="button">Create an account</button>
+          <button id="forgot-open" class="text-button" type="button">Forgot password?</button>
+        </p>
+        <p class="small-note">You don't need an account to try the demo shops.</p>
+      </section>
+
+      <section id="account-view-register" hidden>
+        <form id="register-form" class="account-form">
+          <label for="register-email">Email</label>
+          <input id="register-email" name="email" type="email" autocomplete="email" required>
+          <label for="register-password">Password</label>
+          <input id="register-password" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+          <p class="field-help">At least 10 characters. A short phrase works well.</p>
+          <label class="account-consent"><input name="consent" type="checkbox" required> <span>I have read the <a href="/privacy" target="_blank" rel="noopener">privacy notice</a>.</span></label>
+          <button class="account-primary" type="submit">Create account</button>
+        </form>
+        <p class="account-links"><button id="signin-from-register" class="text-button" type="button">I already have an account</button></p>
+      </section>
+
+      <section id="account-view-forgot" hidden>
+        <form id="forgot-form" class="account-form">
+          <label for="forgot-email">Email</label>
+          <input id="forgot-email" name="email" type="email" autocomplete="email" required>
+          <button class="account-primary" type="submit">Send a reset link</button>
+        </form>
+        <p class="account-links"><button id="signin-from-forgot" class="text-button" type="button">Back to sign in</button></p>
+      </section>
+
+      <section id="account-view-reset" hidden>
+        <form id="reset-form" class="account-form">
+          <label for="reset-password">New password</label>
+          <input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+          <button class="account-primary" type="submit">Set new password</button>
+        </form>
+      </section>
+
+      <section id="account-view-account" hidden>
+        <p class="account-identity"><strong id="account-email"></strong><br><span id="account-verified" class="small-note"></span></p>
+        <button id="account-resend" class="text-button" type="button" hidden>Send the verification email again</button>
+
+        <div id="account-swiggy" class="account-card" hidden>
+          <h3>Swiggy <span id="account-swiggy-env" class="state-label" hidden>Test environment</span></h3>
+          <p id="account-swiggy-status"></p>
+          <p id="account-swiggy-limits" class="small-note"></p>
+          <a id="account-connect" class="account-primary" href="/auth/login" hidden>Connect Swiggy</a>
+          <button id="account-disconnect" class="secondary-button" type="button" hidden>Disconnect Swiggy</button>
+        </div>
+
+        <div class="account-card">
+          <h3>Your real orders</h3>
+          <p id="account-orders-empty" class="small-note">None yet. Demo orders are not kept.</p>
+          <ul id="account-orders" class="account-orders"></ul>
+        </div>
+
+        <details class="account-card">
+          <summary>Change password</summary>
+          <form id="password-form" class="account-form">
+            <label for="password-current">Current password</label>
+            <input id="password-current" name="current" type="password" autocomplete="current-password" required>
+            <label for="password-next">New password</label>
+            <input id="password-next" name="next" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+            <button class="secondary-button" type="submit">Change password</button>
+          </form>
+        </details>
+
+        <details class="account-card">
+          <summary>Your data</summary>
+          <p class="small-note">Read the <a href="/privacy" target="_blank" rel="noopener">privacy notice</a>, or <a href="/api/account/export" download="namma-saathi-data.json">download what we hold about you</a>.</p>
+          <form id="delete-form" class="account-form">
+            <label for="delete-password">Delete my account: enter your password</label>
+            <input id="delete-password" name="password" type="password" autocomplete="current-password" required>
+            <p class="field-help">This removes your account, Swiggy connection, and order records here. It cannot be undone, and it does not change your Swiggy account.</p>
+            <button class="danger-button" type="submit">Delete my account</button>
+          </form>
+        </details>
+
+        <p class="account-links">
+          <button id="account-signout" class="text-button" type="button">Sign out</button>
+          <button id="account-signout-all" class="text-button" type="button">Sign out everywhere</button>
+        </p>
+      </section>
+    </dialog>
   </body>
 </html>

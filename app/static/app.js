@@ -66,6 +66,8 @@ let microphonePending = false;
 let recordingInstruction = "";
 // The readback this page actually received. A spoken yes confirms this cart, not the latest one.
 let heardReadback = null;
+// The person's own Swiggy account, chosen on the page. Off means the demo shops.
+let liveMode = false;
 
 function setBusy(value) {
   busy = value;
@@ -152,7 +154,9 @@ function renderTasks(data) {
   const tasks = data.tasks || [];
   const isMock = data.commerce_mode !== "swiggy";
   tasksPanel.hidden = tasks.length === 0;
-  tasksMode.textContent = isMock ? "· Demo: mock shops, nothing is real" : "· Live Swiggy account";
+  tasksMode.textContent = isMock
+    ? "· Demo: mock shops, nothing is real"
+    : data.swiggy_environment === "staging" ? "· Swiggy test data" : "· Live Swiggy account";
   tasksList.replaceChildren();
   for (const task of tasks) {
     const row = document.createElement("li");
@@ -172,6 +176,11 @@ function renderTasks(data) {
     }
     tasksList.append(row);
   }
+}
+
+// Swiggy's staging server has seeded data and places no real orders, so never call it real.
+function swiggyBadge(data) {
+  return data.swiggy_environment === "staging" ? "Swiggy test data" : "Swiggy live cart";
 }
 
 function renderCart(data) {
@@ -271,7 +280,7 @@ function renderCart(data) {
       : isMock ? `${payment} (demo only)` : payment;
     if (data.commerce_mode === "swiggy") {
       catalogueNote.textContent = "Prices and pack sizes come from Swiggy Instamart.";
-      commerceBadge.textContent = "Swiggy live cart";
+      commerceBadge.textContent = swiggyBadge(data);
       commerceNote.textContent = data.checkout_enabled
         ? "Live Swiggy access is enabled. Review every detail before confirming."
         : "Live product and cart access only. Checkout is disabled.";
@@ -280,7 +289,9 @@ function renderCart(data) {
         : "Live checkout is disabled. This readback will not place an order.";
       confirmButton.textContent = !data.checkout_enabled
         ? "Swiggy checkout disabled"
-        : isDining ? "Confirm real table booking" : "Confirm real Swiggy order";
+        : data.swiggy_environment === "staging"
+          ? (isDining ? "Confirm test booking" : "Confirm test order")
+          : isDining ? "Confirm real table booking" : "Confirm real Swiggy order";
     } else {
       commerceBadge.textContent = "Demo order";
       commerceNote.textContent = "This is a demo. Orders are not sent to a shop.";
@@ -341,6 +352,7 @@ function renderReply(data) {
   }
   assistantNode.textContent = data.assistant_text || "I am ready for your next turn.";
   renderCart(data);
+  if (data.commerce_mode === "swiggy") window.saathiAccountRefresh?.();
   scriptedNote.hidden = data.scripted_understanding !== true;
   if (SHOW_TIMINGS && data.timings_ms) {
     const t = data.timings_ms;
@@ -408,7 +420,11 @@ async function startConversation() {
     const data = await requestJson("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ language: languageSelect.value, address_id: addressSelect.value || null }),
+      body: JSON.stringify({
+        language: languageSelect.value,
+        address_id: addressSelect.value || null,
+        ...(liveMode ? { live: true } : {}),
+      }),
     });
     sessionId = data.session_id;
     sessionStorage.setItem(SESSION_STORAGE_KEY, sessionId);
@@ -427,8 +443,8 @@ async function startConversation() {
 }
 
 async function loadAddresses() {
-  const data = await requestJson("/api/addresses");
-  publicNote.hidden = data.public_deployment !== true;
+  const data = await requestJson(liveMode ? "/api/addresses?live=1" : "/api/addresses");
+  publicNote.hidden = data.public_deployment !== true || data.commerce_mode === "swiggy";
   addressSelect.replaceChildren();
   if (data.addresses.length > 1) {
     const placeholder = document.createElement("option");
@@ -447,13 +463,16 @@ async function loadAddresses() {
   startButton.disabled = data.addresses.length === 0 || data.addresses.length > 1;
   if (data.commerce_mode === "swiggy") {
     catalogueNote.textContent = "Prices and pack sizes come from Swiggy Instamart.";
-    commerceBadge.textContent = "Swiggy live cart";
+    commerceBadge.textContent = swiggyBadge(data);
     commerceNote.textContent = data.checkout_enabled
       ? "Live Swiggy access is enabled. Review every detail before confirming."
       : "Live product and cart access only. Checkout is disabled.";
     confirmationIntro.textContent = data.checkout_enabled
       ? "Saathi will submit this order to Swiggy only after you explicitly confirm."
       : "Live checkout is disabled. This readback will not place an order.";
+  } else {
+    commerceBadge.textContent = "Demo order";
+    commerceNote.textContent = "This is a demo. Orders are not sent to a shop.";
   }
   if (data.addresses.length > 1) {
     document.querySelector("#address-help").textContent = "Choose the exact address for delivery.";
@@ -677,6 +696,19 @@ async function restoreConversation() {
     handleExpired(error);
   }
 }
+
+// account.js calls this. A failed address read leaves the start button off, so nothing is assumed.
+window.saathiSetLive = (useLive) => {
+  if (useLive === liveMode) return;
+  liveMode = useLive;
+  showError("");
+  addressSelect.replaceChildren();
+  startButton.disabled = true;
+  void loadAddresses().catch((error) => {
+    showError(error.message);
+    pageStatus.textContent = "Could not load delivery addresses.";
+  });
+};
 
 pageStatus.textContent = "Ready to start.";
 startButton.addEventListener("click", startConversation);

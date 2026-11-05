@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
+from app.accounts.crypto import parse_keys
 from app.commerce.swiggy import ALLOWED_MCP_URLS, SWIGGY_MCP_URL
 
 GROQ_DEFAULT_MODEL = "openai/gpt-oss-20b"
@@ -51,6 +52,24 @@ class Settings:
     public_base_url: str = ""
     public_daily_turn_limit: int = 300
     public_max_sessions: int = 50
+    # Accounts exist when a database is configured. See docs/production-activation.md.
+    database_url: str | None = field(default=None, repr=False)
+    token_encryption_keys: str | None = field(default=None, repr=False)
+    open_registration: bool = True
+    # Real Swiggy for signed-in, approved users on a public server. Everyone else gets mock shops.
+    multi_user_live: bool = False
+    real_order_daily_limit: int | None = None
+    user_daily_turn_limit: int = 200
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str | None = field(default=None, repr=False)
+    smtp_from: str = ""
+    support_email: str = ""
+
+    @property
+    def accounts_enabled(self) -> bool:
+        return bool(self.database_url)
 
     def require_real_checkout(self) -> None:
         """Refuse an actual checkout unless explicitly enabled for Swiggy."""
@@ -162,7 +181,15 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     public_base_url = (
         values.get("PUBLIC_BASE_URL", "").strip() or values.get("RENDER_EXTERNAL_URL", "").strip()
     )
-    if public_deployment:
+    database_url = values.get("DATABASE_URL", "").strip() or None
+    encryption_keys = values.get("TOKEN_ENCRYPTION_KEYS", "").strip() or None
+    multi_user_live = _flag(values, "MULTI_USER_LIVE")
+    _check_accounts(database_url, encryption_keys)
+    if multi_user_live:
+        _check_multi_user_live(
+            backend, swiggy_live_access, database_url, public_base_url, public_deployment
+        )
+    if public_deployment and not multi_user_live:
         _check_public_deployment(
             backend,
             public_base_url,
@@ -173,7 +200,26 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
                 allow_real_checkout,
             ),
         )
+    raw_daily = values.get("REAL_ORDER_DAILY_LIMIT", "").strip()
+    smtp_host = values.get("SMTP_HOST", "").strip()
+    smtp_from = values.get("SMTP_FROM", "").strip()
+    if smtp_host and not smtp_from:
+        raise ConfigurationError("SMTP_HOST requires SMTP_FROM")
     return Settings(
+        database_url=database_url,
+        token_encryption_keys=encryption_keys,
+        open_registration=values.get("OPEN_REGISTRATION", "true").strip().lower() != "false",
+        multi_user_live=multi_user_live,
+        real_order_daily_limit=(
+            _positive_int(values, "REAL_ORDER_DAILY_LIMIT", 1) if raw_daily else None
+        ),
+        user_daily_turn_limit=_positive_int(values, "USER_DAILY_TURN_LIMIT", 200),
+        smtp_host=smtp_host,
+        smtp_port=_positive_int(values, "SMTP_PORT", 587),
+        smtp_username=values.get("SMTP_USERNAME", "").strip(),
+        smtp_password=values.get("SMTP_PASSWORD") or None,
+        smtp_from=smtp_from,
+        support_email=values.get("SUPPORT_EMAIL", "").strip(),
         llm_primary=llm_primary,
         llm_timeout_seconds=llm_timeout,
         demo_understanding=demo_understanding,
@@ -216,8 +262,53 @@ def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
     return value
 
 
+def _check_accounts(database_url: str | None, encryption_keys: str | None) -> None:
+    if not database_url:
+        return
+    if not database_url.startswith(("postgresql://", "postgres://", "sqlite:///")):
+        raise ConfigurationError("DATABASE_URL must be postgresql://... or sqlite:///path")
+    if not encryption_keys:
+        raise ConfigurationError("DATABASE_URL requires TOKEN_ENCRYPTION_KEYS")
+    try:
+        parse_keys(encryption_keys)
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+
+def _check_multi_user_live(
+    backend: str,
+    live_access: bool,
+    database_url: str | None,
+    base_url: str,
+    public: bool,
+) -> None:
+    """Real accounts on a shared server need per-user storage and a durable order journal."""
+    if backend != "swiggy" or not live_access:
+        raise ConfigurationError(
+            "MULTI_USER_LIVE=true requires COMMERCE_BACKEND=swiggy and SWIGGY_LIVE_ACCESS=true"
+        )
+    if not database_url:
+        raise ConfigurationError("MULTI_USER_LIVE=true requires DATABASE_URL")
+    if not base_url:
+        raise ConfigurationError("MULTI_USER_LIVE=true requires PUBLIC_BASE_URL")
+    if public:
+        if database_url.startswith("sqlite"):
+            # The order journal must survive a redeploy, and a host's local disk may not.
+            raise ConfigurationError("A public server needs a Postgres DATABASE_URL")
+        host = urlsplit(database_url).hostname or ""
+        if (
+            "sslmode=require" not in database_url
+            and "sslmode=verify" not in database_url
+            and (host not in {"localhost", "127.0.0.1"})
+        ):
+            raise ConfigurationError("DATABASE_URL must set sslmode=require or stronger")
+        parts = urlsplit(base_url)
+        if parts.scheme != "https" or not parts.hostname or parts.path not in {"", "/"}:
+            raise ConfigurationError("PUBLIC_BASE_URL must be an https:// origin with no path")
+
+
 def _check_public_deployment(backend: str, base_url: str, *, live_flags: tuple[bool, ...]) -> None:
-    """A public server has no per-user account isolation, so it only ever runs the mock."""
+    """Without MULTI_USER_LIVE, a public server has one shared login, so it only runs the mock."""
     if backend != "mock" or any(live_flags):
         raise ConfigurationError("PUBLIC_DEPLOYMENT=true only runs with the mock backend")
     parts = urlsplit(base_url)
