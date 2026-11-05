@@ -94,6 +94,7 @@ _READ_TOOLS = frozenset(
 )
 _WRITE_TOOLS = frozenset({"update_cart", "clear_cart", "checkout"})
 _TOOL_TIMEOUT_SECONDS = 30.0
+_DEFAULT_RETRY_AFTER_SECONDS = 30.0
 _CHECKOUT_TIMEOUT_SECONDS = 60.0
 _SESSION_IDLE_SECONDS = 120.0
 _TOKEN_EXPIRY_MARGIN_SECONDS = 60.0
@@ -403,6 +404,7 @@ class SwiggyMcpClient:
         self._queue: asyncio.Queue[_ToolRequest] | None = None
         self._worker: asyncio.Task[None] | None = None
         self._worker_loop: asyncio.AbstractEventLoop | None = None
+        self._rate_limited_until = 0.0
         metadata = OAuthClientMetadata(
             client_name="Namma Saathi",
             redirect_uris=[_ANY_URL.validate_python(redirect_uri)],
@@ -541,6 +543,10 @@ class SwiggyMcpClient:
         """Call a tool; returns (data, message, text). Some live tools only answer in text."""
         if name not in self.read_tools and name not in self.write_tools:
             raise CommerceNotAttempted(f"Swiggy tool is not allowed: {name}")
+        if time.monotonic() < self._rate_limited_until:
+            # Nothing is sent, so this is safe even for checkout: no order can result from it.
+            log_event("mcp_tool_call", tool=name, status="rate_limit_wait")
+            raise CommerceNotAttempted("Swiggy asked us to wait before calling again")
         await self._check_token_fresh()
         correlation_id = uuid4().hex
         started = time.perf_counter()
@@ -556,6 +562,7 @@ class SwiggyMcpClient:
             status = "rejected"
             raise
         except SwiggyDiagnosticError as exc:
+            self._note_rate_limit(exc)
             raise diagnostic_from_exception(name, exc.stage, exc) from exc
         except TimeoutError as exc:
             status = "timeout"
@@ -580,6 +587,7 @@ class SwiggyMcpClient:
                 raise CommerceAuthRequired(
                     "Swiggy login is missing or expired. Run `uv run python -m app.swiggy_auth`."
                 ) from exc
+            self._note_rate_limit(exc)
             raise diagnostic_from_exception(name, _operation_stage(exc, name), exc) from exc
         finally:
             log_event(
@@ -589,6 +597,11 @@ class SwiggyMcpClient:
                 status=status,
                 duration_ms=round((time.perf_counter() - started) * 1000),
             )
+
+    def _note_rate_limit(self, error: BaseException) -> None:
+        wait = _retry_after_seconds(error)
+        if wait is not None:
+            self._rate_limited_until = time.monotonic() + wait
 
     async def get_addresses(self) -> list[Address]:
         addresses: list[Address] = []
@@ -762,6 +775,33 @@ def _requires_login(error: BaseException) -> bool:
     details = getattr(error, "error", None)
     code = getattr(details, "code", getattr(error, "code", None))
     return code == -32001
+
+
+def _retry_after_seconds(error: BaseException, seen: int = 0) -> float | None:
+    """How long Swiggy asked us to wait, or None if this was not a rate limit.
+
+    https://mcp.swiggy.com/builders/docs/operate/rate-limits.md: the gateway returns 429 with
+    Retry-After, which surfaces at the MCP layer as JSON-RPC -32000. Default from its example.
+    """
+    if seen > 8:
+        return None
+    if isinstance(error, BaseExceptionGroup):
+        group = cast(BaseExceptionGroup[BaseException], error)
+        for nested in group.exceptions:
+            wait = _retry_after_seconds(nested, seen + 1)
+            if wait is not None:
+                return wait
+        return None
+    if isinstance(error, httpx2.HTTPStatusError) and error.response.status_code == 429:
+        try:
+            return max(float(error.response.headers.get("retry-after", "")), 0.0)
+        except ValueError:
+            return _DEFAULT_RETRY_AFTER_SECONDS
+    details = getattr(error, "error", None)
+    if getattr(details, "code", getattr(error, "code", None)) == -32000:
+        return _DEFAULT_RETRY_AFTER_SECONDS
+    cause = error.__cause__ or error.__context__
+    return _retry_after_seconds(cause, seen + 1) if cause is not None else None
 
 
 def _provider_error_text(payload: Mapping[str, object]) -> str:

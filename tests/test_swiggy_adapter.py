@@ -5,6 +5,7 @@ import logging
 import sys
 from typing import Any, cast
 
+import httpx2
 import pytest
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.auth.exceptions import OAuthTokenError
@@ -32,6 +33,7 @@ from app.commerce.swiggy import (
     SecureCredentialStoreUnavailable,
     SwiggyDiagnosticError,
     SwiggyInstamart,
+    _retry_after_seconds,  # pyright: ignore[reportPrivateUsage]
     diagnostic_from_exception,
     run_authorization_callback_safely,
 )
@@ -1447,3 +1449,55 @@ def test_unknown_endpoint_is_refused() -> None:
             redirect_handler=_no_redirect,
             callback_handler=_no_callback,
         )
+
+
+def _rate_limited_response(retry_after: str | None) -> httpx2.HTTPStatusError:
+    headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    request = httpx2.Request("POST", SWIGGY_MCP_URL)
+    response = httpx2.Response(429, headers=headers, request=request)
+    return httpx2.HTTPStatusError("rate limited", request=request, response=response)
+
+
+@pytest.mark.parametrize(
+    ("error", "wait"),
+    [
+        (_rate_limited_response("7"), 7.0),
+        (_rate_limited_response(None), 30.0),
+        (_rate_limited_response("soon"), 30.0),
+        (BaseExceptionGroup("group", [_rate_limited_response("7")]), 7.0),
+    ],
+)
+def test_retry_after_is_read_from_a_rate_limit(error: BaseException, wait: float) -> None:
+    assert _retry_after_seconds(error) == wait
+
+
+def test_a_jsonrpc_rate_limit_and_an_unrelated_error_are_told_apart() -> None:
+    class JsonRpcFailure(Exception):
+        code = -32000
+
+    assert _retry_after_seconds(JsonRpcFailure()) == 30.0
+    assert _retry_after_seconds(ValueError("other")) is None
+
+
+@pytest.mark.asyncio
+async def test_after_a_rate_limit_nothing_is_sent_until_the_wait_is_over(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter()
+    calls: list[str] = []
+
+    async def fresh() -> None:
+        return None
+
+    async def limited(name: str, arguments: object, timeout: float) -> object:
+        del arguments, timeout
+        calls.append(name)
+        raise _rate_limited_response("60")
+
+    monkeypatch.setattr(adapter, "_check_token_fresh", fresh)
+    monkeypatch.setattr(adapter, "_send", limited)
+    with pytest.raises(CommerceError):
+        await adapter.search_products("address", "milk")
+    with pytest.raises(CommerceNotAttempted):
+        await adapter.search_products("address", "milk")
+    assert calls == ["search_products"]
