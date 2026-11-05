@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -21,6 +22,7 @@ from app.llm.extractor import (
     IntentExtractionError,
 )
 from app.llm.scripted import ScriptedExtractor
+from app.observability import log_event
 from app.timing import note_understood_by, stage
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,13 @@ class ProviderStep:
     extract: Extract
 
 
+COOLDOWN_SECONDS = 30.0
+
+
 class ChainedExtractor:
+    """A provider that just failed is skipped for a while, so one that is rate-limited or
+    overloaded does not cost every turn its full timeout. The last provider is always tried."""
+
     def __init__(self, steps: list[ProviderStep]) -> None:
         if not steps:
             raise IntentExtractionError(
@@ -46,6 +54,7 @@ class ChainedExtractor:
                 ),
             )
         self.steps = steps
+        self._resting_until: dict[str, float] = {}
 
     def extract(
         self,
@@ -56,7 +65,12 @@ class ChainedExtractor:
     ) -> GroceryIntent:
         last_error: IntentExtractionError | None = None
         with stage("understanding"):
-            for step in self.steps:
+            for index, step in enumerate(self.steps):
+                last = index == len(self.steps) - 1
+                if not last and time.monotonic() < self._resting_until.get(step.name, 0.0):
+                    log_event("understanding", op=step.name, outcome="skipped_resting")
+                    continue
+                started = time.monotonic()
                 try:
                     result = step.extract(text, language, context)
                 except IntentExtractionError as exc:
@@ -64,8 +78,16 @@ class ChainedExtractor:
                 except Exception as exc:  # A broken provider must not end the turn.
                     last_error = IntentExtractionError(f"{step.name} failed: {type(exc).__name__}")
                 else:
+                    self._resting_until.pop(step.name, None)
                     note_understood_by(step.name)
                     return result
+                self._resting_until[step.name] = time.monotonic() + COOLDOWN_SECONDS
+                log_event(
+                    "understanding",
+                    op=step.name,
+                    outcome="failed",
+                    duration_ms=round((time.monotonic() - started) * 1000),
+                )
                 logger.warning("Intent provider %s failed; trying the next", step.name)
         assert last_error is not None
         raise last_error
@@ -147,4 +169,10 @@ def build_extractor(settings: Settings) -> ChainedExtractor:
         steps.append(_openrouter_step(settings))
     if settings.demo_understanding == "fallback":
         steps.append(scripted)
+    # Names only, never keys: tells an operator from the host's log what this server will use.
+    log_event(
+        "providers",
+        op=",".join(step.name for step in steps) or "none",
+        kind="gnani" if settings.gnani_api_key else "no_gnani",
+    )
     return ChainedExtractor(steps)

@@ -207,6 +207,8 @@ Everything real is off unless switched on. [.env.example](.env.example) lists ev
 - [DESIGN.md](DESIGN.md): product scope, safety invariants, and architecture (see §16)
 - [docs/production-activation.md](docs/production-activation.md): the checklist for the day Swiggy
   grants access
+- [docs/swiggy-readiness-audit.md](docs/swiggy-readiness-audit.md): what is built, what needs Swiggy,
+  and how fast activation can be
 - [docs/integration-status.md](docs/integration-status.md): what is mocked, read-only, or blocked
 - [docs/swiggy-integration-notes.md](docs/swiggy-integration-notes.md): verified Swiggy behaviour
 - [docs/demo-script.md](docs/demo-script.md): the demo, with recovery steps and checklists

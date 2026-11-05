@@ -667,6 +667,11 @@ class FakeSwiggy:
         if mode == "http_419":
             self.revoke(name)
             return JSONResponse(status_code=419, content={"error": "revoked"})
+        if mode == "http_403":
+            return JSONResponse(status_code=403, content={"error": "forbidden"})
+        if mode == "rpc_forbidden":
+            error = {"code": -32003, "message": "Forbidden"}
+            return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": error})
         if mode == "http_429":
             return Response(status_code=429, headers={"Retry-After": "30"})
         if mode == "http_500":

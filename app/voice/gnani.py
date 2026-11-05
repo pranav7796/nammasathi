@@ -3,17 +3,27 @@
 Contracts: https://docs.gnani.ai/api/STT/speech-to-text and
 https://docs.gnani.ai/api/TTS/tts-inference. Timbre v2.5 voices have a
 preferred language; see https://docs.gnani.ai/api/TTS/available-voices.
+
+Measured on 6 November 2026 with this project's key: Gnani served one request at a time across
+recognition and synthesis. A second simultaneous request got 429 at once, while the same requests
+one after another all succeeded. So every call waits for a single shared slot, and a 429 caused by
+another process on the same key is retried briefly.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import wave
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 import httpx
+
+from app.observability import log_event
 
 STT_ENDPOINT = "https://api.vachana.ai/stt/v3"
 TTS_ENDPOINT = "https://api.vachana.ai/api/v1/tts/inference"
@@ -22,6 +32,36 @@ SUPPORTED_LANGUAGES = {"kn-IN", "hi-IN", "en-IN"}
 DEFAULT_VOICES = {"kn-IN": "Saanvi", "hi-IN": "Nalini", "en-IN": "Kaveri"}
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".aac", ".m4a"}
 MAX_AUDIO_SECONDS = 30  # Official REST transcription limit (not the task's proposed 60).
+
+
+_BUSY_RETRY_DELAYS = (0.4, 0.8, 1.6)
+_slots: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+
+def _slot() -> asyncio.Semaphore:
+    """One per event loop, sized by GNANI_MAX_CONCURRENT (default 1, what the key allows)."""
+    loop = asyncio.get_running_loop()
+    if loop not in _slots:
+        try:
+            size = max(int(os.environ.get("GNANI_MAX_CONCURRENT", "1")), 1)
+        except ValueError:
+            size = 1
+        _slots[loop] = asyncio.Semaphore(size)
+    return _slots[loop]
+
+
+async def _call_gnani(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+    """Wait for the shared slot, then send. Retry a 429 briefly: nothing was processed."""
+    response: httpx.Response | None = None
+    for delay in (*_BUSY_RETRY_DELAYS, None):
+        async with _slot():
+            response = await send()
+        if response.status_code != 429 or delay is None:
+            return response
+        log_event("speech", outcome="busy_retry")
+        await asyncio.sleep(delay)
+    assert response is not None
+    return response
 
 
 class GnaniError(Exception):
@@ -59,15 +99,17 @@ class PrismaSTT:
     async def _transcribe_once(self, path: str | Path) -> PrismaTranscript:
         audio_path = _validate_audio_path(path)
         _validate_wav_duration(audio_path)
+        audio = audio_path.read_bytes()
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                with audio_path.open("rb") as audio:
-                    response = await client.post(
+                response = await _call_gnani(
+                    lambda: client.post(
                         STT_ENDPOINT,
                         headers={"X-API-Key-ID": self._api_key},
                         files={"audio_file": (audio_path.name, audio, _mime_type(audio_path))},
                         data={"language_code": self.language, "format": "transcribe"},
                     )
+                )
         except httpx.TimeoutException as exc:
             raise GnaniError("timeout", "Prisma transcription timed out") from exc
         except httpx.RequestError as exc:
@@ -134,10 +176,12 @@ class TimbreTTS:
         }
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    TTS_ENDPOINT,
-                    headers={"X-API-Key-ID": self._api_key},
-                    json=body,
+                response = await _call_gnani(
+                    lambda: client.post(
+                        TTS_ENDPOINT,
+                        headers={"X-API-Key-ID": self._api_key},
+                        json=body,
+                    )
                 )
         except httpx.TimeoutException as exc:
             raise GnaniError("timeout", "Timbre synthesis timed out") from exc

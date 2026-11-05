@@ -39,7 +39,7 @@ from mcp.client.auth.exceptions import OAuthTokenError
 from mcp.client.auth.oauth2 import TokenStorage
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, PaginatedRequestParams, TextContent
 from pydantic import AnyUrl, TypeAdapter
 
 from app.commerce.base import (
@@ -421,6 +421,8 @@ class SwiggyMcpClient:
         self._worker: asyncio.Task[None] | None = None
         self._worker_loop: asyncio.AbstractEventLoop | None = None
         self._rate_limited_until = 0.0
+        self._offered_tools: frozenset[str] | None = None  # from tools/list; None = unknown
+        self._forbidden_seen = False
         if delegated_auth is not None:
             self._http_auth: httpx2.Auth = delegated_auth
             return
@@ -497,11 +499,22 @@ class SwiggyMcpClient:
                     raise diagnostic_from_exception(
                         "MCP session", _transport_stage(exc, "MCP initialization"), exc
                     ) from exc
+                self._offered_tools = await _offered_tools(session)
                 while True:
                     try:
                         current = await asyncio.wait_for(queue.get(), _SESSION_IDLE_SECONDS)
                     except TimeoutError:
                         return
+                    offered = self._offered_tools
+                    if offered is not None and current.name not in offered:
+                        # The server does not offer it to this account, so it is never sent.
+                        log_event("mcp_tool_call", tool=current.name, status="not_offered")
+                        if not current.future.done():
+                            current.future.set_exception(
+                                CommerceNotAttempted(f"Swiggy does not offer {current.name} here")
+                            )
+                        current = None
+                        continue
                     try:
                         result = await session.call_tool(
                             current.name, current.arguments, read_timeout_seconds=current.timeout
@@ -593,6 +606,13 @@ class SwiggyMcpClient:
                 if self._delegated is not None and self._delegated.login_lost:
                     status = "login_lost"
                     raise CommerceAuthRequired("Swiggy login is missing or expired.") from exc
+                # Forbidden is decided before Swiggy acts, so it is not attempted, even checkout.
+                if self._forbidden_seen or _is_forbidden(exc):
+                    self._forbidden_seen = False
+                    status = "forbidden"
+                    raise CommerceNotAttempted(
+                        "Swiggy does not allow this for this account"
+                    ) from exc
                 raise
             status = "ok"
             return data, message, _result_text(result)
@@ -638,7 +658,10 @@ class SwiggyMcpClient:
             )
 
     async def _watch_rate_limit(self, response: httpx2.Response) -> None:
-        """The SDK turns an HTTP 429 into a generic error, so Retry-After must be read here."""
+        """The SDK turns HTTP errors into generic ones, so 403 and 429 are noted here."""
+        if response.status_code == 403:
+            self._forbidden_seen = True
+            return
         if response.status_code != 429:
             return
         try:
@@ -812,6 +835,37 @@ def _result_text(result: CallToolResult) -> str:
 
 def _operation_stage(error: Exception, name: str) -> str:
     return _transport_stage(error, f"MCP operation {name}")
+
+
+async def _offered_tools(session: ClientSession) -> frozenset[str] | None:
+    """Every tool the server lists for this account, following pages. None if it won't say."""
+    names: set[str] = set()
+    params: PaginatedRequestParams | None = None
+    try:
+        for _ in range(20):
+            listed = await session.list_tools(params=params)
+            names.update(tool.name for tool in listed.tools)
+            cursor: str | None = listed.next_cursor
+            if not cursor:
+                return frozenset(names)
+            params = PaginatedRequestParams(cursor=cursor)
+    except Exception:
+        log_event("mcp_tool_list", status="unavailable")
+    return None
+
+
+def _is_forbidden(error: BaseException, seen: int = 0) -> bool:
+    """JSON-RPC -32003, which Swiggy's error page lists as forbidden."""
+    if seen > 8:
+        return False
+    if isinstance(error, BaseExceptionGroup):
+        group = cast(BaseExceptionGroup[BaseException], error)
+        return any(_is_forbidden(nested, seen + 1) for nested in group.exceptions)
+    details = getattr(error, "error", None)
+    if getattr(details, "code", getattr(error, "code", None)) == -32003:
+        return True
+    cause = error.__cause__ or error.__context__
+    return _is_forbidden(cause, seen + 1) if cause is not None else False
 
 
 def _requires_login(error: BaseException) -> bool:

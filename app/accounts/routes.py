@@ -154,6 +154,8 @@ def account_router() -> APIRouter:
             user = await service.current_user(request)
             if not await service.ensure_ready():
                 raise AccountsUnavailable(UNAVAILABLE_MESSAGE)
+            if user is not None and service.settings.multi_user_live:
+                await service.tokens.keep_alive(user.id)
             refusal = await service.live_refusal(user)
             connected = await service.tokens.connected(user.id) if user else False
             language = await service.run(service.store.language, user.id) if user else None

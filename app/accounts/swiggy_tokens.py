@@ -26,6 +26,8 @@ from app.commerce.swiggy import DelegatedLogin
 from app.observability import log_event
 
 REFRESH_MARGIN_SECONDS = 60
+# An expired token cannot be refreshed, so a person who keeps visiting is refreshed early.
+KEEP_ALIVE_SECONDS = 2 * 24 * 60 * 60
 RECONNECT_MESSAGE = "Your Swiggy connection has ended. Please connect Swiggy again."
 _TIMEOUT_SECONDS = 15.0
 _DEFAULT_LIFETIME_SECONDS = 3600
@@ -146,6 +148,21 @@ class SwiggyTokens:
             raise CommerceError("Swiggy sign-in sent an unreadable reply") from exc
         log_event("oauth", op="refresh", outcome="ok")
         return refreshed
+
+    async def keep_alive(self, user_id: str) -> None:
+        """Refresh a token that will expire within two days, so a regular visitor never has to
+        sign in to Swiggy again. Failures are left for the next real call to report."""
+        async with self._lock(user_id):
+            token = await self._read(user_id)
+            now = time.time()
+            if token is None or token.expires_at <= now:
+                return
+            if token.expires_at - now > KEEP_ALIVE_SECONDS:
+                return
+            try:
+                await self._refresh(user_id, token)
+            except (CommerceError, CommerceAuthRequired):
+                log_event("oauth", op="keep_alive", outcome="failed")
 
     async def forget(self, user_id: str) -> None:
         await asyncio.to_thread(self._store.delete_token, user_id, self.issuer)

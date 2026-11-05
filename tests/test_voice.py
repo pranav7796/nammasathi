@@ -97,10 +97,67 @@ async def test_prisma_errors_are_classified(
 ) -> None:
     path = tmp_path / "turn.wav"
     path.write_bytes(wav_bytes())
-    patch_httpx(monkeypatch, [response(status), response(status)])
+    # A busy key (429) is retried a few times before it is reported.
+    monkeypatch.setattr("app.voice.gnani._BUSY_RETRY_DELAYS", (0.0, 0.0, 0.0))
+    patch_httpx(monkeypatch, [response(status)] * 8)
     with pytest.raises(GnaniError) as error:
         await PrismaSTT("secret", language="kn-IN").transcribe(path)
     assert error.value.category == category
+
+
+@pytest.mark.asyncio
+async def test_a_busy_key_is_retried_and_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "turn.wav"
+    path.write_bytes(wav_bytes())
+    monkeypatch.setattr("app.voice.gnani._BUSY_RETRY_DELAYS", (0.0, 0.0, 0.0))
+    client = patch_httpx(
+        monkeypatch,
+        [response(429), response(200, json_body={"success": True, "transcript": "akki"})],
+    )
+    transcript = await PrismaSTT("secret", language="kn-IN").transcribe(path)
+    assert transcript.text == "akki"
+    assert len(client.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_speech_calls_wait_their_turn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Measured: the key serves one request at a time and refuses a second with 429."""
+    import asyncio
+
+    import httpx
+
+    from app.voice.gnani import TimbreTTS
+
+    in_flight = 0
+    worst = 0
+
+    async def post(self: httpx.AsyncClient, url: str, **kwargs: object) -> httpx.Response:
+        del self, kwargs
+        nonlocal in_flight, worst
+        in_flight += 1
+        worst = max(worst, in_flight)
+        try:
+            if in_flight > 1:
+                return httpx.Response(429, request=httpx.Request("POST", url))
+            await asyncio.sleep(0.01)
+            return httpx.Response(200, content=wav_bytes(), request=httpx.Request("POST", url))
+        finally:
+            in_flight -= 1
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    replies = [
+        TimbreTTS("secret", voice="Kaveri", language="en-IN").synthesize(
+            "hello", tmp_path / f"reply{number}.wav"
+        )
+        for number in range(5)
+    ]
+    written = await asyncio.gather(*replies)
+    assert len(written) == 5
+    assert worst == 1
 
 
 @pytest.mark.asyncio
