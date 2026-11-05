@@ -16,7 +16,7 @@ for you. A yes only ever applies to what Saathi just read back.
 
 > **Project status:** all three journeys work end to end on built-in mock shops, with real speech and
 > a real LLM. **No real order or booking has been placed.** Live Swiggy access is limited to what is
-> listed under [Status](#status), and production access has been requested but not granted.
+> listed under [Status](#status), and Swiggy has not granted production access.
 
 ## Why it is built this way
 
@@ -180,8 +180,9 @@ Everything real is off unless switched on. [.env.example](.env.example) lists ev
   phrases need review by native speakers. Hinglish goes through `hi-IN`.
 - **Sessions:** in memory, so a restart loses the conversation but not the journal. A real account
   means one user, one process, on this machine.
-- **Speed:** measured with real services on 5 November 2026, a spoken turn took 1 to 4 seconds when
-  Groq answered and 0.9 to 1.1 seconds for a yes, which skips the LLM. Groq's free tier rate-limits
+- **Speed:** measured with real services on 5 November 2026, a spoken turn usually took 2 to 4 seconds
+  when Groq answered and about 1 second for a yes, which skips the LLM. A speech recognition retry
+  can add a few seconds. Groq's free tier rate-limits
   quickly, and Gemini then takes 5 to 13 seconds. An unclear real checkout adds about 30 seconds.
 - **Hosted demo:** mock shops only. The hosted Swiggy sign-in stops at the callback and has only run
   against a stand-in server; live ordering per hosted user is not built.
