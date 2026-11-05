@@ -218,10 +218,15 @@ def stitch(
     workdir: Path,
 ) -> None:
     listing = workdir / "frames.txt"
+    # Frames arrive in bursts, and a short duration in the list gets rounded up, so the picture
+    # falls behind the voice. Sampling a fixed grid keeps both on the same clock.
+    step = 0.08
     with listing.open("w") as handle:
-        for index, (at, path) in enumerate(timeline):
-            following = timeline[index + 1][0] if index + 1 < len(timeline) else ended
-            handle.write(f"file '{path}'\nduration {max(following - at, 0.01):.3f}\n")
+        index = 0
+        for tick in range(int(ended / step) + 1):
+            while index + 1 < len(timeline) and timeline[index + 1][0] <= tick * step:
+                index += 1
+            handle.write(f"file '{timeline[index][1]}'\nduration {step:.2f}\n")
     command = [
         "ffmpeg",
         "-y",
