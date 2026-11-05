@@ -3,13 +3,22 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#fff8ec">
+    <meta name="theme-color" content="#fbf4e6">
     <title>Namma Saathi — your personal AI for everyday life</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Baloo+Tamma+2:wght@600;700&family=Noto+Sans:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;500;700&family=Noto+Sans+Kannada:wght@400;500;700&display=swap">
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/app.js" defer></script>
   </head>
   <body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3" fill="currentColor"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M8.5 21.5h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="icon-basket" viewBox="0 0 24 24"><path d="M3.5 10h17l-1.8 9.5a1.5 1.5 0 0 1-1.5 1.2H6.8a1.5 1.5 0 0 1-1.5-1.2zM8 10l3-6.500M16 10l-3-6.500" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="icon-meal" viewBox="0 0 24 24"><path d="M3 12h18a9 9 0 0 1-18 0zM7 8c0-2 2-2 2-4M12 8c0-2 2-2 2-4M17 8c0-2 2-2 2-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="icon-table" viewBox="0 0 24 24"><path d="M3 9h18M12 9v11M8 20h8M6 9V5M18 9V5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    </svg>
     <main class="page">
       <header class="masthead">
         <div class="brand-mark" aria-hidden="true">ಸ</div>
@@ -20,107 +29,135 @@
       <p id="error-message" class="error-message" role="alert" hidden></p>
       <p id="scripted-note" class="scripted-note" role="status" hidden>Mock mode, scripted understanding: no LLM was used for this turn.</p>
 
-      <section class="panel home-panel" aria-labelledby="start-heading">
-        <p class="eyebrow">Namaste · ನಮಸ್ಕಾರ</p>
-        <h2 id="start-heading">Tell Saathi what you need.</h2>
-        <p class="welcome-copy">Just say it, and I'll help get it done: groceries, a meal, or a table at a restaurant.</p>
-        <label for="language">Choose the language you will speak</label>
-        <select id="language" aria-describedby="language-help">
-          <option value="kn-IN">ಕನ್ನಡ · Kannada</option>
-          <option value="hi-IN">हिन्दी · Hindi</option>
-          <option value="en-IN">English</option>
-        </select>
-        <p id="language-help" class="language-help">Selected language: <strong id="selected-language">ಕನ್ನಡ · Kannada</strong></p>
-        <label for="delivery-address">Delivery address</label>
-        <select id="delivery-address" aria-describedby="address-help" disabled></select>
-        <p id="address-help" class="language-help">Choose the address for this order.</p>
-        <button id="start-button" class="mic-button" type="button" aria-label="Start speaking with Saathi">
-          <span class="mic-symbol" aria-hidden="true">🎙</span><span>Tap to speak</span>
-        </button>
-        <p class="how-to">Tap once and speak clearly. Tap <strong>Finish speaking</strong> when you are done. You can say one item or several.</p>
-        <p id="commerce-note" class="demo-note">This is a demo. Orders are not sent to a shop.</p>
-        <p id="public-note" class="demo-note" hidden>Public demo with mock shops. Nothing here reaches Swiggy, and no order or booking is real.</p>
+      <section class="home-panel" aria-labelledby="start-heading">
+        <div class="hero">
+          <p class="greeting">Namaste · ನಮಸ್ಕಾರ · नमस्ते</p>
+          <h2 id="start-heading">Just say what you need.</h2>
+          <p class="welcome-copy">I'll help get it done, and nothing happens until you've heard the details and said yes.</p>
+          <ul class="capabilities" aria-label="What Saathi can do">
+            <li><svg aria-hidden="true"><use href="#icon-basket"/></svg>Groceries</li>
+            <li><svg aria-hidden="true"><use href="#icon-meal"/></svg>A meal</li>
+            <li><svg aria-hidden="true"><use href="#icon-table"/></svg>A table</li>
+          </ul>
+        </div>
+        <div class="start-card">
+          <p class="field-title" id="language-title">Which language will you speak?</p>
+          <div id="language-choices" class="language-choices" role="group" aria-labelledby="language-title">
+            <button type="button" class="language-choice" data-lang="kn-IN" aria-pressed="true"><span lang="kn">ಕನ್ನಡ</span><small>Kannada</small></button>
+            <button type="button" class="language-choice" data-lang="hi-IN" aria-pressed="false"><span lang="hi">हिन्दी</span><small>Hindi</small></button>
+            <button type="button" class="language-choice" data-lang="en-IN" aria-pressed="false"><span>English</span><small>Indian English</small></button>
+          </div>
+          <select id="language" aria-label="Language" hidden>
+            <option value="kn-IN">ಕನ್ನಡ · Kannada</option>
+            <option value="hi-IN">हिन्दी · Hindi</option>
+            <option value="en-IN">English</option>
+          </select>
+          <p class="sr-only">Selected language: <strong id="selected-language">ಕನ್ನಡ · Kannada</strong></p>
+          <label for="delivery-address">Deliver to</label>
+          <select id="delivery-address" aria-describedby="address-help" disabled></select>
+          <p id="address-help" class="field-help">Choose the address for this order.</p>
+          <button id="start-button" class="start-button" type="button" aria-label="Start speaking with Saathi">
+            <svg aria-hidden="true"><use href="#icon-mic"/></svg><span>Tap to speak</span>
+          </button>
+          <p class="how-to">Speak naturally, then tap <strong>Finish speaking</strong>. You can also type.</p>
+          <p id="commerce-note" class="demo-note">This is a demo. Orders are not sent to a shop.</p>
+          <p id="public-note" class="demo-note" hidden>Public demo with mock shops. Nothing here reaches Swiggy, and no order or booking is real.</p>
+        </div>
       </section>
 
       <section id="conversation" class="conversation" aria-label="Your conversation with Saathi" hidden>
-        <section class="panel voice-panel" aria-labelledby="voice-heading">
-          <div class="voice-copy">
-            <p class="eyebrow" id="language-status">ಕನ್ನಡ · Kannada selected</p>
-            <h2 id="voice-heading">What would you like?</h2>
-            <p id="recording-status" class="recording-status" role="status" aria-live="polite">Tap the microphone and tell Saathi.</p>
-          </div>
-          <button id="record-button" class="mic-button" type="button" aria-pressed="false" aria-label="Start recording">
-            <span class="mic-symbol" aria-hidden="true">🎙</span><span id="record-label">Speak to Saathi</span>
-          </button>
-          <form id="text-form" class="text-form">
-            <label for="text-input">Or type it</label>
-            <div class="text-row">
-              <input id="text-input" type="text" maxlength="400" autocomplete="off" placeholder="Two kilos of rice and one litre of milk">
-              <button id="text-send" class="secondary-button" type="submit">Send</button>
-            </div>
-          </form>
-          <p class="voice-help">For example: “milk and bread”, “something for dinner”, or “a table for two on Friday.” Recordings stop after 30 seconds.</p>
-        </section>
-
         <section id="tasks-panel" class="tasks-panel" aria-label="What Saathi is holding for you" hidden>
-          <p class="eyebrow">Your tasks <span id="tasks-mode" class="tasks-mode"></span></p>
+          <p class="tasks-title">Your tasks <span id="tasks-mode" class="tasks-mode"></span></p>
           <ul id="tasks-list" class="tasks-list"></ul>
         </section>
 
         <div class="conversation-grid">
-          <section class="panel talk-panel" aria-labelledby="conversation-heading">
-            <h2 id="conversation-heading">Saathi is here to help</h2>
-            <p id="assistant-text" class="assistant-text" aria-live="polite">Tell me what you need.</p>
-            <p class="field-label">What I heard</p>
-            <p id="transcript" class="transcript" aria-live="polite">Your words will appear here.</p>
-            <audio id="reply-audio" controls preload="none" aria-label="Hear Saathi's reply" hidden></audio>
-            <p id="audio-note" class="small-note" hidden></p>
-          </section>
+          <div class="conversation-main">
+            <section class="panel talk-panel" aria-labelledby="conversation-heading">
+              <div class="saathi-row">
+                <div class="avatar" aria-hidden="true">ಸ</div>
+                <div class="bubble-column">
+                  <h2 id="conversation-heading">Saathi</h2>
+                  <p id="assistant-text" class="assistant-text" aria-live="polite">Tell me what you need.</p>
+                  <p class="thinking" aria-hidden="true"><span></span><span></span><span></span></p>
+                  <audio id="reply-audio" controls preload="none" aria-label="Hear Saathi's reply" hidden></audio>
+                  <p id="audio-note" class="small-note" hidden></p>
+                </div>
+              </div>
+              <div class="heard-row">
+                <p class="field-label">What I heard</p>
+                <p id="transcript" class="transcript" aria-live="polite"></p>
+              </div>
+              <div id="suggestions" class="suggestions" aria-label="Try saying" hidden></div>
+            </section>
 
-          <section class="panel cart-panel" aria-labelledby="cart-heading">
-            <div class="cart-heading-row"><h2 id="cart-heading">Your task</h2><span id="state-label" class="state-label">Ready</span></div>
-            <ul id="cart-items" class="cart-items"><li class="empty-cart">Nothing here yet. Tell Saathi what you need.</li></ul>
-            <p class="cart-total"><span>Total</span><strong id="cart-total">₹0</strong></p>
-            <p id="catalogue-note" class="small-note">Prices and pack sizes are from the demo catalogue.</p>
-            <p class="edit-help">To edit or remove an item, tap Speak to Saathi and say what to change.</p>
-          </section>
+            <section id="options-panel" class="panel options-panel" aria-labelledby="options-heading" hidden>
+              <p class="eyebrow">Saathi has a question</p>
+              <h2 id="options-heading">Which one would you like?</h2>
+              <p class="confirmation-intro">Tap one, or say first, second, or third.</p>
+              <div id="options-list" class="option-grid"></div>
+            </section>
+
+            <section id="order-panel" class="panel order-panel" aria-labelledby="order-heading" role="status" hidden>
+              <h2 id="order-heading">Your order</h2>
+              <p id="order-result" class="confirmation-intro"></p>
+              <p id="order-ids" class="small-note"></p>
+            </section>
+
+            <section id="confirmation-panel" class="panel receipt" aria-labelledby="confirm-heading" hidden>
+              <p id="confirm-eyebrow" class="eyebrow">Please check before ordering</p>
+              <h2 id="confirm-heading">Is this correct?</h2>
+              <p id="confirmation-intro" class="confirmation-intro">Saathi will place this demo order only after you choose Confirm order.</p>
+              <ul id="confirmation-items" class="confirmation-items"></ul>
+              <dl class="order-details">
+                <div class="total-row"><dt>Total</dt><dd id="confirmation-total">₹0</dd></div>
+                <div><dt id="confirmation-address-label">Delivery address</dt><dd id="confirmation-address">Your saved address</dd></div>
+                <div><dt>Payment</dt><dd id="confirmation-payment">Cash on delivery (demo)</dd></div>
+              </dl>
+              <p id="confirm-note" class="confirm-note">Please review every item, the total, address, and payment method.</p>
+              <div class="order-actions">
+                <button id="confirm-button" class="confirm-button" type="button" disabled>Confirm demo order</button>
+                <button id="back-button" class="secondary-button" type="button">Make a change</button>
+                <button id="cancel-button" class="secondary-button" type="button">Cancel this</button>
+              </div>
+            </section>
+
+            <button id="new-session-button" class="text-button" type="button">Start a new conversation</button>
+          </div>
+
+          <aside class="conversation-side">
+            <section class="panel cart-panel" aria-labelledby="cart-heading">
+              <div class="cart-heading-row"><h2 id="cart-heading">Your task</h2><span id="state-label" class="state-label">Ready</span></div>
+              <ul id="cart-items" class="cart-items"><li class="empty-cart">Nothing here yet. Tell Saathi what you need.</li></ul>
+              <p class="cart-total"><span>Total</span><strong id="cart-total">₹0</strong></p>
+              <p id="catalogue-note" class="small-note">Prices and pack sizes are from the demo catalogue.</p>
+              <p class="edit-help small-note">To change anything, just tell Saathi.</p>
+            </section>
+          </aside>
         </div>
 
-        <section id="options-panel" class="panel confirmation-panel" aria-labelledby="options-heading" hidden>
-          <p class="eyebrow">Saathi has a question</p>
-          <h2 id="options-heading">Which one would you like?</h2>
-          <p class="confirmation-intro">Tap one, or say first, second, or third.</p>
-          <div id="options-list" class="order-actions"></div>
-        </section>
-
-        <section id="order-panel" class="panel confirmation-panel" aria-labelledby="order-heading" role="status" hidden>
-          <h2 id="order-heading">Your order</h2>
-          <p id="order-result" class="confirmation-intro"></p>
-          <p id="order-ids" class="small-note"></p>
-        </section>
-
-        <section id="confirmation-panel" class="panel confirmation-panel" aria-labelledby="confirm-heading" hidden>
-          <p id="confirm-eyebrow" class="eyebrow">Please check before ordering</p>
-          <h2 id="confirm-heading">Is this correct?</h2>
-          <p id="confirmation-intro" class="confirmation-intro">Saathi will place this demo order only after you choose Confirm order.</p>
-          <ul id="confirmation-items" class="confirmation-items"></ul>
-          <dl class="order-details">
-            <div><dt>Total</dt><dd id="confirmation-total">₹0</dd></div>
-            <div><dt id="confirmation-address-label">Delivery address</dt><dd id="confirmation-address">Your saved address</dd></div>
-            <div><dt>Payment</dt><dd id="confirmation-payment">Cash on delivery (demo)</dd></div>
-          </dl>
-          <p id="confirm-note" class="confirm-note">Please review every item, the total, address, and payment method.</p>
-          <div class="order-actions">
-            <button id="confirm-button" class="confirm-button" type="button" disabled>Confirm demo order</button>
-            <button id="back-button" class="secondary-button" type="button">Go back and make a change</button>
-            <button id="cancel-button" class="secondary-button" type="button">Cancel this</button>
+        <section class="composer" aria-labelledby="voice-heading">
+          <div class="composer-inner">
+            <div class="composer-status">
+              <h2 id="voice-heading" class="sr-only">What would you like?</h2>
+              <p id="recording-status" class="recording-status" role="status" aria-live="polite">Tap the microphone and tell Saathi.</p>
+              <p class="language-tag" id="language-status">ಕನ್ನಡ · Kannada selected</p>
+            </div>
+            <div class="composer-controls">
+              <button id="record-button" class="mic-button" type="button" aria-pressed="false" aria-label="Start recording">
+                <svg aria-hidden="true"><use href="#icon-mic"/></svg><span id="record-label">Speak to Saathi</span>
+              </button>
+              <form id="text-form" class="text-form">
+                <label for="text-input" class="sr-only">Or type it</label>
+                <input id="text-input" type="text" maxlength="400" autocomplete="off" placeholder="Or type it here">
+                <button id="text-send" class="send-button" type="submit">Send</button>
+              </form>
+            </div>
           </div>
         </section>
-
-        <button id="new-session-button" class="text-button" type="button">Start a new conversation</button>
       </section>
       <p id="page-status" class="page-status" role="status" aria-live="polite"></p>
-      <p id="timings" class="small-note" hidden></p>
+      <p id="timings" class="small-note timings" hidden></p>
     </main>
   </body>
 </html>

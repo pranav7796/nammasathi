@@ -110,7 +110,7 @@ Add `?timings=1` to the page address to see these for each turn.
 
 | Layer | Choice |
 |---|---|
-| App | Python 3.12, FastAPI, a plain HTML and JavaScript push-to-talk page |
+| App | Python 3.12, FastAPI, a plain HTML and JavaScript push-to-talk page, usable on a phone |
 | Speech | Gnani Prisma (recognition) and Timbre (voice) |
 | Understanding | Groq, then Gemini, with a strict Pydantic schema |
 | Swiggy | Official MCP SDK over Streamable HTTP; OAuth 2.1 with PKCE and Dynamic Client Registration |

@@ -44,6 +44,9 @@ const cartHeading = document.querySelector("#cart-heading");
 const tasksPanel = document.querySelector("#tasks-panel");
 const tasksList = document.querySelector("#tasks-list");
 const tasksMode = document.querySelector("#tasks-mode");
+const languageChoices = document.querySelector("#language-choices");
+const suggestionsNode = document.querySelector("#suggestions");
+const orderHeading = document.querySelector("#order-heading");
 const confirmEyebrow = document.querySelector("#confirm-eyebrow");
 const confirmationAddressLabel = document.querySelector("#confirmation-address-label");
 const textForm = document.querySelector("#text-form");
@@ -66,6 +69,7 @@ let heardReadback = null;
 
 function setBusy(value) {
   busy = value;
+  conversation.classList[value ? "add" : "remove"]("is-busy");
   startButton.disabled = value || !addressSelect.value;
   recordButton.disabled = value || !sessionId;
   textSend.disabled = value || !sessionId;
@@ -81,6 +85,7 @@ function showError(message) {
 function showConversation() {
   startPanel.hidden = true;
   conversation.hidden = false;
+  window.scrollTo?.(0, 0);
   recordButton.disabled = !sessionId;
 }
 
@@ -88,9 +93,42 @@ function displayLanguage(code) {
   return ({ "kn-IN": "ಕನ್ನಡ · Kannada", "hi-IN": "हिन्दी · Hindi", "en-IN": "English" })[code] || code;
 }
 
-languageSelect.addEventListener("change", () => {
+function showLanguage() {
   selectedLanguage.textContent = displayLanguage(languageSelect.value);
+  for (const choice of languageChoices.children) {
+    choice.setAttribute("aria-pressed", String(choice.dataset.lang === languageSelect.value));
+  }
+}
+
+languageSelect.addEventListener("change", showLanguage);
+languageChoices.addEventListener("click", (event) => {
+  const choice = event.target.closest("[data-lang]");
+  if (!choice) return;
+  languageSelect.value = choice.dataset.lang;
+  showLanguage();
 });
+
+const SUGGESTIONS = {
+  "en-IN": ["I need rice and milk", "I want something for dinner", "Book a table for two tomorrow at 7 PM in Indiranagar, Italian"],
+  "hi-IN": ["दो किलो चावल और एक लीटर दूध", "रात के खाने के लिए कुछ चाहिए", "कल शाम सात बजे इंदिरानगर में दो लोगों के लिए इटालियन टेबल बुक करो"],
+  "kn-IN": ["ಎರಡು ಕೆಜಿ ಅಕ್ಕಿ ಮತ್ತು ಒಂದು ಲೀಟರ್ ಹಾಲು", "ರಾತ್ರಿ ಊಟಕ್ಕೆ ಏನಾದರೂ ಬೇಕು", "ನಾಳೆ ಸಂಜೆ ಏಳು ಗಂಟೆಗೆ ಇಂದಿರಾನಗರದಲ್ಲಿ ಇಬ್ಬರಿಗೆ ಇಟಾಲಿಯನ್ ಟೇಬಲ್ ಬುಕ್ ಮಾಡಿ"],
+};
+
+function renderSuggestions(data) {
+  const phrases = (data.tasks || []).length === 0 ? SUGGESTIONS[data.language] || [] : [];
+  suggestionsNode.hidden = phrases.length === 0;
+  suggestionsNode.replaceChildren();
+  for (const phrase of phrases) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "suggestion";
+    button.textContent = phrase;
+    button.addEventListener("click", () => {
+      if (!busy && sessionId) void sendText(phrase);
+    });
+    suggestionsNode.append(button);
+  }
+}
 
 const CAPABILITY_TITLES = { grocery: "Your groceries", food: "Your meal", dining: "Your table" };
 
@@ -138,6 +176,7 @@ function renderTasks(data) {
 
 function renderCart(data) {
   renderTasks(data);
+  renderSuggestions(data);
   const isDining = data.capability === "dining";
   cartHeading.textContent = CAPABILITY_TITLES[data.capability] || "Your task";
   catalogueNote.hidden = isDining;
@@ -262,7 +301,6 @@ function renderOptions(data) {
   options.forEach((option, index) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "secondary-button";
     const quantity = option.quantity > 1 ? `${option.quantity} × ` : "";
     const size = option.pack_size ? `, ${option.pack_size}` : "";
     const price = data.capability === "dining" ? "" : ` — ₹${option.unit_price_inr}`;
@@ -276,6 +314,10 @@ function renderOrder(data, isMock) {
   const ids = data.order_ids || [];
   const unknown = data.state === "ORDER_UNKNOWN";
   orderPanel.hidden = !(unknown || (data.state === "DONE" && ids.length > 0));
+  orderHeading.textContent = data.capability === "dining" ? "Your table" : "Your order";
+  orderPanel.dataset.outcome = unknown || data.order_partial || (!isMock && !data.order_verified)
+    ? "attention"
+    : "settled";
   if (unknown) {
     orderResult.textContent = "Saathi could not confirm this order. Please do not order again. Check the Swiggy app.";
   } else if (isMock) {
@@ -629,7 +671,7 @@ async function restoreConversation() {
     renderCart(data);
     if (data.last_reply) assistantNode.textContent = data.last_reply;
     languageSelect.value = data.language;
-    selectedLanguage.textContent = displayLanguage(data.language);
+    showLanguage();
     pageStatus.textContent = `Conversation restored. ${displayLanguage(data.language)} selected.`;
   } catch (error) {
     handleExpired(error);

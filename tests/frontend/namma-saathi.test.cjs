@@ -37,6 +37,7 @@ const selectors = [
   "#options-list", "#order-panel", "#order-result", "#order-ids", "#catalogue-note", "#cart-heading",
   "#tasks-panel", "#tasks-list", "#text-form", "#text-input", "#text-send", "#scripted-note",
   "#public-note", "#timings", "#tasks-mode", "#confirm-eyebrow", "#confirmation-address-label",
+  "#language-choices", "#suggestions", "#order-heading",
 ];
 const initialCart = [
   { name: "Sona Masoori Rice", pack_size: "1 kg", quantity: 2, unit_price_inr: 78, line_total_inr: 156 },

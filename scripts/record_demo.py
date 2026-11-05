@@ -66,7 +66,8 @@ OVERLAY = """
     #demo-card { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center;
       justify-content: center; text-align: center; padding: 48px; background: #fff8ec;
       color: #1f1a12; font: 32px/1.4 system-ui; }
-    main.page { padding-bottom: 120px; }`;
+    .composer { bottom: 64px; }
+    .conversation { padding-bottom: 230px; }`;
   document.head.append(style);
 }
 """
@@ -98,7 +99,7 @@ async def start_session(page: Page, language: str) -> None:
     await page.evaluate("() => sessionStorage.clear()")
     await page.reload()
     await page.evaluate(OVERLAY)
-    await page.select_option("#language", language)
+    await page.click(f'[data-lang="{language}"]')
     await page.wait_for_function("() => !document.querySelector('#start-button').disabled")
 
 
