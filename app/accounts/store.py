@@ -13,6 +13,9 @@ from app.accounts.crypto import token_hash
 from app.accounts.db import Database, Row
 
 SESSION_LIFETIME_SECONDS = 14 * 24 * 60 * 60
+HISTORY_KEPT_TURNS = 200
+HISTORY_KEPT_SECONDS = 90 * 24 * 60 * 60
+DEMO_ORDERS_KEPT = 100
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 
@@ -39,6 +42,24 @@ class User:
     email_verified: bool
     live_access: bool
     created_at: int
+
+
+@dataclass(frozen=True)
+class Turn:
+    created_at: int  # milliseconds
+    language: str
+    capability: str
+    said: str
+    reply: str
+
+
+@dataclass(frozen=True)
+class DemoOrder:
+    created_at: int  # milliseconds
+    capability: str
+    reference: str
+    summary: str
+    total_inr: str
 
 
 @dataclass(frozen=True)
@@ -204,6 +225,114 @@ class AccountStore:
             tx.execute(
                 "DELETE FROM swiggy_tokens WHERE user_id = ? AND issuer = ?", (user_id, issuer)
             )
+
+    # Preferences, history, and demo orders: one person's own, demo mode only
+
+    def set_language(self, user_id: str, language: str) -> None:
+        with self.database.transaction() as tx:
+            tx.execute("DELETE FROM user_preferences WHERE user_id = ?", (user_id,))
+            tx.execute(
+                "INSERT INTO user_preferences (user_id, language, updated_at) VALUES (?, ?, ?)",
+                (user_id, language, int(time.time())),
+            )
+
+    def language(self, user_id: str) -> str | None:
+        with self.database.transaction() as tx:
+            rows = tx.execute("SELECT language FROM user_preferences WHERE user_id = ?", (user_id,))
+        return cast(str, rows[0]["language"]) if rows else None
+
+    def add_turn(self, user_id: str, turn: Turn) -> None:
+        """Keeps the newest turns only, and nothing older than the retention period."""
+        with self.database.transaction() as tx:
+            tx.execute(
+                "INSERT INTO conversation_turns "
+                "(id, user_id, created_at, language, capability, said, reply) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    uuid4().hex,
+                    user_id,
+                    turn.created_at,
+                    turn.language,
+                    turn.capability,
+                    turn.said,
+                    turn.reply,
+                ),
+            )
+            cutoff = turn.created_at - HISTORY_KEPT_SECONDS * 1000
+            tx.execute(
+                "DELETE FROM conversation_turns WHERE user_id = ? AND created_at < ?",
+                (user_id, cutoff),
+            )
+            tx.execute(
+                "DELETE FROM conversation_turns WHERE user_id = ? AND id NOT IN ("
+                "SELECT id FROM conversation_turns WHERE user_id = ? "
+                "ORDER BY created_at DESC LIMIT ?)",
+                (user_id, user_id, HISTORY_KEPT_TURNS),
+            )
+
+    def turns(self, user_id: str, limit: int = 50) -> list[Turn]:
+        """Newest last."""
+        with self.database.transaction() as tx:
+            rows = tx.execute(
+                "SELECT created_at, language, capability, said, reply FROM conversation_turns "
+                "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            )
+        return [
+            Turn(
+                cast(int, row["created_at"]),
+                cast(str, row["language"]),
+                cast(str, row["capability"]),
+                cast(str, row["said"]),
+                cast(str, row["reply"]),
+            )
+            for row in reversed(rows)
+        ]
+
+    def clear_turns(self, user_id: str) -> None:
+        with self.database.transaction() as tx:
+            tx.execute("DELETE FROM conversation_turns WHERE user_id = ?", (user_id,))
+
+    def add_demo_order(self, user_id: str, order: DemoOrder) -> None:
+        with self.database.transaction() as tx:
+            tx.execute(
+                "INSERT INTO demo_orders "
+                "(id, user_id, created_at, capability, reference, summary, total_inr) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    uuid4().hex,
+                    user_id,
+                    order.created_at,
+                    order.capability,
+                    order.reference,
+                    order.summary,
+                    order.total_inr,
+                ),
+            )
+            tx.execute(
+                "DELETE FROM demo_orders WHERE user_id = ? AND id NOT IN ("
+                "SELECT id FROM demo_orders WHERE user_id = ? ORDER BY created_at DESC LIMIT ?)",
+                (user_id, user_id, DEMO_ORDERS_KEPT),
+            )
+
+    def demo_orders(self, user_id: str, limit: int = 50) -> list[DemoOrder]:
+        """Newest first."""
+        with self.database.transaction() as tx:
+            rows = tx.execute(
+                "SELECT created_at, capability, reference, summary, total_inr FROM demo_orders "
+                "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            )
+        return [
+            DemoOrder(
+                cast(int, row["created_at"]),
+                cast(str, row["capability"]),
+                cast(str, row["reference"]),
+                cast(str, row["summary"]),
+                cast(str, row["total_inr"]),
+            )
+            for row in rows
+        ]
 
     # Dynamic Client Registration, kept so a restart does not register a new client
 

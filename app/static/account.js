@@ -10,6 +10,7 @@
   const modeLiveDetail = document.querySelector("#mode-live-detail");
   const connectionNotice = document.querySelector("#connection-notice");
   const message = document.querySelector("#account-message");
+  const accountsNotice = document.querySelector("#accounts-notice");
   const views = ["signin", "register", "forgot", "reset", "account"];
   let me = { enabled: false };
   let resetToken = "";
@@ -83,6 +84,55 @@
     }
   }
 
+  const CAPABILITY = { grocery: "Groceries", food: "Meal", dining: "Table" };
+
+  function renderDemoOrders(orders) {
+    const list = byId("account-demo-orders");
+    list.replaceChildren();
+    byId("account-demo-empty").hidden = orders.length > 0;
+    for (const order of orders) {
+      const row = document.createElement("li");
+      const title = document.createElement("strong");
+      title.textContent = `${CAPABILITY[order.capability] || "Demo"}: ${order.summary || order.reference}`;
+      const detail = document.createElement("span");
+      const total = order.capability === "dining" ? "free table" : `₹${order.total_inr}`;
+      detail.textContent = `Demo only, not real · ${total} · ${new Date(order.created_at).toLocaleString()}`;
+      row.append(title, detail);
+      list.append(row);
+    }
+  }
+
+  function renderHistory(turns) {
+    const list = byId("account-history");
+    list.replaceChildren();
+    byId("account-history-clear").hidden = turns.length === 0;
+    if (turns.length === 0) {
+      const empty = document.createElement("li");
+      empty.textContent = "Nothing yet.";
+      list.append(empty);
+      return;
+    }
+    for (const turn of turns) {
+      const row = document.createElement("li");
+      if (turn.said) {
+        const said = document.createElement("span");
+        said.className = "said";
+        said.textContent = turn.said.startsWith("[") ? "(tapped a button)" : `You: ${turn.said}`;
+        row.append(said);
+      }
+      const replied = document.createElement("span");
+      replied.className = "replied";
+      replied.textContent = `Saathi: ${turn.reply}`;
+      row.append(replied);
+      list.append(row);
+    }
+  }
+
+  async function loadList(url, key, render) {
+    const response = await fetch(url);
+    if (response.ok) render((await response.json())[key]);
+  }
+
   function renderSwiggy() {
     const live = me.live || {};
     const card = byId("account-swiggy");
@@ -133,7 +183,12 @@
 
   function render() {
     accountButton.hidden = !me.enabled;
-    if (!me.enabled) return;
+    accountsNotice.hidden = me.available !== false;
+    accountsNotice.textContent = me.message || "";
+    if (!me.enabled || me.available === false) {
+      if (me.available === false) accountButton.hidden = true;
+      return;
+    }
     accountButton.textContent = me.user ? "Your account" : "Sign in";
     renderMode();
     if (!me.user) return;
@@ -154,7 +209,12 @@
     me = await response.json();
     render();
     if (!wasAvailable && me.live?.available === true) setMode(true);
+    // A returning person starts in the language they last used.
+    const saved = me.preferences?.language;
+    if (saved && !firstLoadDone) window.saathiSetLanguage?.(saved);
+    firstLoadDone = true;
   }
+  let firstLoadDone = false;
   window.saathiAccountRefresh = refresh;
 
   async function openAccount() {
@@ -164,8 +224,11 @@
       showView("signin");
     } else {
       showView("account");
-      const response = await fetch("/api/account/orders");
-      if (response.ok) renderOrders((await response.json()).orders);
+      await Promise.all([
+        loadList("/api/account/orders", "orders", renderOrders),
+        loadList("/api/account/demo-orders", "orders", renderDemoOrders),
+        loadList("/api/account/history", "turns", renderHistory),
+      ]);
     }
     if (!dialog.open) dialog.showModal();
   }
@@ -230,6 +293,16 @@
   submit("delete-form", async (data) => {
     await call("/api/account/delete", { password: data.get("password") });
     window.location.assign("/");
+  });
+
+  byId("account-history-clear").addEventListener("click", async () => {
+    try {
+      await call("/api/account/history/clear");
+      renderHistory([]);
+      say("Your conversation history is cleared.");
+    } catch (error) {
+      say(error.message, true);
+    }
   });
 
   byId("account-resend").addEventListener("click", async () => {

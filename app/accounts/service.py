@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -23,19 +25,29 @@ from app.accounts.crypto import (
 from app.accounts.db import Database, connect, migrate
 from app.accounts.journal import DatabaseOrderJournal
 from app.accounts.mailer import Mailer, build_mailer
-from app.accounts.store import AccountStore, User
+from app.accounts.store import AccountStore, EmailTaken, InvalidEmail, User
 from app.accounts.swiggy_tokens import DelegatedAuth, SwiggyTokens
 from app.commerce.base import CommerceAdapter
 from app.commerce.swiggy import SWIGGY_MCP_URL, SwiggyInstamart, food_or_dining_url
 from app.config import Settings
 from app.dining.swiggy import SwiggyDineout
 from app.food.swiggy import SwiggyFood
+from app.observability import log_event
+
+T = TypeVar("T")
 
 COOKIE_SECURE = "__Host-saathi_session"
 COOKIE_LOCAL = "saathi_session"
 MAX_FAILURES_PER_ACCOUNT = 10
 MAX_FAILURES_PER_ADDRESS = 50
 FAILURE_WINDOW_SECONDS = 15 * 60
+SIGNUPS_PER_ADDRESS_PER_HOUR = 20
+SIGNUPS_PER_HOUR = 300  # for the whole site: bounds abuse even if an address is forged
+SIGNUP_WINDOW_SECONDS = 60 * 60
+RETRY_DATABASE_SECONDS = 10.0
+UNAVAILABLE_MESSAGE = (
+    "Accounts are unavailable for a moment. You can still use the demo without signing in."
+)
 _MAX_LIVE_USERS = 500
 _MAX_TRACKED_FAILURES = 20_000
 
@@ -59,14 +71,20 @@ def environment_name(settings: Settings) -> str:
     return "staging" if "staging" in settings.swiggy_mcp_url else "production"
 
 
+class AccountsUnavailable(Exception):
+    """The database cannot be reached. Accounts wait; the anonymous demo carries on."""
+
+
 class LoginLimiter:
-    """Slows password guessing. In memory, so it resets on restart, and only bounds one server."""
+    """Slows password guessing and mass sign-up. In memory: it resets on restart and bounds one
+    server process. Each kind of event has its own keys, so nothing one person does can lock out
+    everyone else, except the site-wide sign-up ceiling, which exists to stop floods."""
 
     def __init__(self) -> None:
         self._failures: dict[str, list[float]] = {}
 
-    def _recent(self, key: str) -> list[float]:
-        cutoff = time.monotonic() - FAILURE_WINDOW_SECONDS
+    def _recent(self, key: str, window: float = FAILURE_WINDOW_SECONDS) -> list[float]:
+        cutoff = time.monotonic() - window
         kept = [moment for moment in self._failures.get(key, []) if moment > cutoff]
         if kept:
             self._failures[key] = kept
@@ -89,6 +107,19 @@ class LoginLimiter:
 
     def clear(self, email: str) -> None:
         self._failures.pop(f"e:{email}", None)
+
+    def signup_blocked(self, address: str) -> bool:
+        return (
+            len(self._recent(f"s:{address}", SIGNUP_WINDOW_SECONDS)) >= SIGNUPS_PER_ADDRESS_PER_HOUR
+            or len(self._recent("s:*", SIGNUP_WINDOW_SECONDS)) >= SIGNUPS_PER_HOUR
+        )
+
+    def record_signup(self, address: str) -> None:
+        if len(self._failures) > _MAX_TRACKED_FAILURES:
+            self._failures.clear()
+        now = time.monotonic()
+        self._failures.setdefault(f"s:{address}", []).append(now)
+        self._failures.setdefault("s:*", []).append(now)
 
 
 class LiveAdapters:
@@ -180,14 +211,42 @@ class AccountService:
         self._closing: set[asyncio.Future[None]] = set()
         # Each hash needs about 32 MB, so a small server allows only a few at once.
         self._hashing = asyncio.Semaphore(4)
+        self.ready = False
+        self._last_attempt = float("-inf")
+        self._preparing = asyncio.Lock()
 
     @classmethod
-    def start(
+    async def start(
         cls, settings: Settings, *, mailer: Mailer | None = None, stub: SwiggyStub | None = None
     ) -> AccountService:
+        """Never fails because the database is down: it keeps trying when accounts are used."""
         database = connect(settings.database_url or "")
-        migrate(database)
-        return cls(settings, database, mailer=mailer, stub=stub)
+        service = cls(settings, database, mailer=mailer, stub=stub)
+        await service.ensure_ready()
+        return service
+
+    async def ensure_ready(self) -> bool:
+        """Apply migrations once the database answers. Retries at most every few seconds."""
+        if self.ready:
+            return True
+        async with self._preparing:
+            if self.ready:
+                return True
+            if time.monotonic() - self._last_attempt < RETRY_DATABASE_SECONDS:
+                return False
+            self._last_attempt = time.monotonic()
+            try:
+                await asyncio.to_thread(migrate, self.database)
+            except Exception as exc:
+                log_event("database", op="migrate", outcome="unavailable", kind=type(exc).__name__)
+                return False
+            self.ready = True
+            log_event("database", op="migrate", outcome="ready")
+            return True
+
+    async def require_ready(self) -> None:
+        if not await self.ensure_ready():
+            raise AccountsUnavailable(UNAVAILABLE_MESSAGE)
 
     @property
     def secure_cookies(self) -> bool:
@@ -212,7 +271,22 @@ class AccountService:
         token = request.cookies.get(self.cookie_name)
         if not token:
             return None
-        return await asyncio.to_thread(self.store.session_user, token)
+        await self.require_ready()
+        try:
+            return await asyncio.to_thread(self.store.session_user, token)
+        except Exception as exc:
+            raise AccountsUnavailable(UNAVAILABLE_MESSAGE) from exc
+
+    async def run(self, call: Callable[..., T], *args: object) -> T:
+        """A store call off the event loop; any database failure becomes AccountsUnavailable."""
+        await self.require_ready()
+        try:
+            return await asyncio.to_thread(call, *args)
+        except (EmailTaken, InvalidEmail):
+            raise
+        except Exception as exc:
+            log_event("database", op="query", outcome="failed", kind=type(exc).__name__)
+            raise AccountsUnavailable(UNAVAILABLE_MESSAGE) from exc
 
     def journal(self, user_id: str) -> DatabaseOrderJournal:
         return DatabaseOrderJournal(self.database, user_id)

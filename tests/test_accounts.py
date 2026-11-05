@@ -369,11 +369,11 @@ async def test_oversized_requests_are_refused(tmp_path: Path) -> None:
 
 
 async def test_sign_ups_from_one_address_are_bounded(tmp_path: Path) -> None:
-    from app.accounts.service import MAX_FAILURES_PER_ADDRESS
+    from app.accounts.service import SIGNUPS_PER_ADDRESS_PER_HOUR
 
     async with site(tmp_path) as s, s.browser() as browser:
-        for _ in range(MAX_FAILURES_PER_ADDRESS):
-            s.service.limiter.record_failure("", "127.0.0.1")
+        for _ in range(SIGNUPS_PER_ADDRESS_PER_HOUR):
+            s.service.limiter.record_signup("127.0.0.1")
         assert (await register(browser)).status_code == 429
 
 

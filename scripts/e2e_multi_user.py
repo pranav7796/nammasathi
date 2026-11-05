@@ -171,9 +171,62 @@ async def journey(args: argparse.Namespace, fake: FakeSwiggy, inbox: Inbox, app:
         await asha.click("#account-close")
         checks.check("register: still no live choice", not await asha.is_visible("#mode-choice"))
 
+        # 2b. Before any Swiggy access: her own demo, in Hindi, kept on her account.
+        await asha.goto(f"{SITE}/?typed=1")
+        await asha.wait_for_function("() => !document.querySelector('#start-button').disabled")
+        await asha.click('[data-lang="hi-IN"]')
+        await asha.click("#start-button")
+        await asha.wait_for_selector("#conversation:not([hidden])")
+        await say(asha, "दो किलो चावल और एक लीटर दूध")
+        await say(asha, "हाँ")
+        await asha.wait_for_selector("#order-panel:not([hidden])")
+        hindi = await asha.text_content("#order-result")
+        checks.check(
+            "demo account: Hindi order finished and says demo",
+            "demo" in (hindi or "").casefold(),
+            hindi,
+        )
+        await asha.goto(f"{SITE}/#signin")
+        await asha.wait_for_selector("#account-demo-orders li")
+        demo_list = await asha.text_content("#account-demo-orders")
+        checks.check(
+            "demo account: order kept, marked not real",
+            "not real" in (demo_list or "").casefold(),
+            demo_list,
+        )
+        await asha.click("#account-history-card summary")
+        history_text = await asha.text_content("#account-history")
+        checks.check("demo account: history kept", "चावल" in (history_text or ""))
+        real_empty = await asha.is_visible("#account-orders-empty")
+        checks.check("demo account: nothing under real orders", real_empty)
+        await asha.screenshot(path=out / "account-demo-history.png")
+        await asha.click("#account-close")
+
+        # 2c. On another device she signs in: her language and conversation come with her.
+        tablet = await browser_for()
+        await tablet.goto(f"{SITE}/?typed=1")
+        await tablet.click("#account-button")
+        await tablet.fill("#signin-email", "asha@example.com")
+        await tablet.fill("#signin-password", PASSWORD)
+        await tablet.click('#signin-form button[type="submit"]')
+        await tablet.wait_for_selector("#account-view-account:not([hidden])")
+        await tablet.click("#account-close")
+        await tablet.goto(f"{SITE}/?typed=1")
+        await tablet.wait_for_selector("#conversation:not([hidden])")
+        restored = await tablet.text_content("#assistant-text")
+        checks.check(
+            "another device: conversation carried over", "डेमो" in (restored or ""), restored
+        )
+        await tablet.click("#new-session-button")
+        pressed = await tablet.get_attribute('[data-lang="hi-IN"]', "aria-pressed")
+        checks.check("another device: Hindi remembered", pressed == "true")
+
         # 3. Verified and invited, she connects through the OAuth redirect and shops live.
         await connect(asha, "asha@example.com", "asha")
         await asha.goto(f"{SITE}/?typed=1")
+        # Signed in, she lands back in her demo conversation; she starts a new one to go live.
+        await asha.wait_for_selector("#conversation:not([hidden])")
+        await asha.click("#new-session-button")
         await asha.wait_for_selector("#mode-choice:not([hidden])")
         await asha.wait_for_function("() => !document.querySelector('#start-button').disabled")
         pressed = await asha.get_attribute("#mode-live", "aria-pressed")

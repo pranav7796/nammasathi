@@ -62,6 +62,35 @@ _MIGRATIONS: tuple[tuple[str, ...], ...] = (
         )""",
         "CREATE INDEX order_attempts_user ON order_attempts(user_id, created_at)",
     ),
+    (
+        """CREATE TABLE user_preferences (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            language TEXT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )""",
+        # Demo mode only: what was said and answered, so a person can pick up where they left off.
+        """CREATE TABLE conversation_turns (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at BIGINT NOT NULL,
+            language TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            said TEXT NOT NULL,
+            reply TEXT NOT NULL
+        )""",
+        "CREATE INDEX conversation_turns_user ON conversation_turns(user_id, created_at)",
+        # Finished demo orders and bookings. Never real, and kept apart from order_attempts.
+        """CREATE TABLE demo_orders (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at BIGINT NOT NULL,
+            capability TEXT NOT NULL,
+            reference TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            total_inr TEXT NOT NULL
+        )""",
+        "CREATE INDEX demo_orders_user ON demo_orders(user_id, created_at)",
+    ),
 )
 
 
@@ -154,16 +183,19 @@ class PostgresDatabase:
         from psycopg.rows import dict_row
         from psycopg_pool import ConnectionPool
 
-        # check= replaces connections a hosted database closed while it slept.
+        # check= replaces connections a hosted database closed while it slept. Statements are
+        # never prepared server-side, so a transaction pooler such as Neon's works too. Opening
+        # does not wait: an unreachable database must not stop the server from starting.
         self._pool = ConnectionPool(
             url,
             min_size=1,
             max_size=5,
-            open=True,
-            timeout=15,
-            kwargs={"row_factory": dict_row},
+            open=False,
+            timeout=8,
+            kwargs={"row_factory": dict_row, "prepare_threshold": None, "connect_timeout": 8},
             check=ConnectionPool.check_connection,
         )
+        self._pool.open(wait=False)
 
     @contextmanager
     def transaction(self) -> Generator[Transaction]:
@@ -175,7 +207,7 @@ class PostgresDatabase:
             tx.execute("SELECT 1")
 
     def close(self) -> None:
-        self._pool.close()
+        self._pool.close(timeout=2)
 
 
 def connect(url: str) -> Database:
@@ -184,6 +216,9 @@ def connect(url: str) -> Database:
     if url.startswith(("postgresql://", "postgres://")):
         return cast(Database, PostgresDatabase(url))
     raise ValueError("DATABASE_URL must be postgresql://... or sqlite:///path")
+
+
+SCHEMA_VERSION = len(_MIGRATIONS)
 
 
 def migrate(database: Database) -> None:

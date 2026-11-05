@@ -311,7 +311,7 @@ async def _main(args: argparse.Namespace, stub: SwiggyStub | None = None) -> int
     settings = load_settings()
     if not settings.database_url:
         raise SystemExit("DATABASE_URL is not set.")
-    service = AccountService.start(settings, mailer=build_mailer(settings), stub=stub)
+    service = await AccountService.start(settings, mailer=build_mailer(settings), stub=stub)
     report, finish = _reporter()
     try:
         if args.command == "config":

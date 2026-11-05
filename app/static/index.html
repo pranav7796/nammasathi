@@ -29,6 +29,7 @@
       </header>
 
       <p id="error-message" class="error-message" role="alert" hidden></p>
+      <p id="accounts-notice" class="scripted-note" role="status" hidden></p>
       <p id="connection-notice" class="scripted-note" role="status" hidden>Your Swiggy account is not connected. <button id="connection-notice-open" class="text-button" type="button">Connect it</button></p>
       <p id="scripted-note" class="scripted-note" role="status" hidden>Mock mode, scripted understanding: no LLM was used for this turn.</p>
 
@@ -232,8 +233,21 @@
         </div>
 
         <div class="account-card">
+          <h3>Your demo orders <span class="state-label">Not real</span></h3>
+          <p id="account-demo-empty" class="small-note">None yet. Finish a demo order or booking and it appears here.</p>
+          <ul id="account-demo-orders" class="account-orders"></ul>
+        </div>
+
+        <details id="account-history-card" class="account-card">
+          <summary>Your conversation history</summary>
+          <p class="small-note">What you said to Saathi in demo conversations, and its replies. Kept for 90 days, newest 200 turns.</p>
+          <ul id="account-history" class="account-history"></ul>
+          <button id="account-history-clear" class="secondary-button" type="button">Clear my history</button>
+        </details>
+
+        <div class="account-card">
           <h3>Your real orders</h3>
-          <p id="account-orders-empty" class="small-note">None yet. Demo orders are not kept.</p>
+          <p id="account-orders-empty" class="small-note">None yet. Real orders need a connected Swiggy account.</p>
           <ul id="account-orders" class="account-orders"></ul>
         </div>
 

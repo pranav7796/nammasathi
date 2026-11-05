@@ -28,14 +28,17 @@ Swiggy's.
 
 | Step | Status |
 |---|---|
-| Sign-up, sign-in, password change and reset, delete, export | Tested |
+| Sign-up, sign-in, password change and reset, delete, export | Tested, including on Neon |
+| Per-person history, demo orders, language, conversation on another device | Tested, including on Neon and across a restart |
+| Spoken requests in Kannada, Hindi, and English on demo shops | Tested with real Gnani speech, on Neon |
+| Database outage: demo carries on, accounts come back | Tested with a cut connection |
 | Per-user Swiggy sign-in, encrypted tokens, refresh and rotation, disconnect | Stand-in only |
 | Isolation: tokens, addresses, carts, orders, journals, limits, conversations | Stand-in only |
 | Grocery, food, and booking journeys, with order verification | Stand-in only |
 | Lost replies, refusals, 401, 419, 429, revoked login | Stand-in only |
 | Sending real email | **Not run**: only a fake mailer |
 | Real Swiggy staging or production | **Blocked**: needs Swiggy |
-| Deployed with accounts on | **Needs the owner**: database and keys. See [production-activation.md](production-activation.md) |
+| Deployed with accounts on | **Needs the owner's approval to merge**. The owner reports adding the database settings in Render; that is not visible from outside. |
 
 ## Why execution is blocked
 

@@ -6,11 +6,12 @@ import asyncio
 import base64
 import html
 import logging
+import sqlite3
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -19,16 +20,23 @@ from typing import Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
+import psycopg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from psycopg_pool import PoolTimeout
 from pydantic import BaseModel
 
 from app.accounts.mailer import Mailer
 from app.accounts.routes import account_router
-from app.accounts.service import AccountService, SwiggyStub
-from app.accounts.store import User
+from app.accounts.service import (
+    UNAVAILABLE_MESSAGE,
+    AccountService,
+    AccountsUnavailable,
+    SwiggyStub,
+)
+from app.accounts.store import DemoOrder, Turn, User
 from app.assistant.orchestrator import Assistant, Reply, Workflow
 from app.assistant.router import Domain
 from app.assistant.workflows import OrderWorkflow
@@ -111,6 +119,7 @@ class BrowserSession:
     settings: Settings
     last_reply: str = ""
     owner: str | None = None  # the signed-in user, who alone may use this conversation
+    recorded_orders: set[str] = field(default_factory=set[str])
 
     @property
     def runner(self) -> TextTurnRunner:
@@ -160,8 +169,9 @@ def create_app(
     extractor_lock = asyncio.Lock()
     default_extractor: IntentExtractor | None = None
     budget = DemoBudget()
+    site_budget = DemoBudget()  # every turn, signed in or not: protects speech and LLM quota
     user_budgets: dict[str, DemoBudget] = {}
-    live_conversation: dict[str, str] = {}  # user id -> their one live conversation
+    current_conversation: dict[str, str] = {}  # user id -> their one conversation
     shared_adapter: CommerceAdapter | None = None
     shared_food: dict[str, CommerceAdapter] = {}
     shared_dining: DiningAdapter | None = None
@@ -207,7 +217,7 @@ def create_app(
         application.state.settings = runtime_settings
         application.state.sessions = sessions
         service = (
-            AccountService.start(runtime_settings, mailer=mailer, stub=swiggy_stub)
+            await AccountService.start(runtime_settings, mailer=mailer, stub=swiggy_stub)
             if runtime_settings.accounts_enabled
             else None
         )
@@ -223,6 +233,14 @@ def create_app(
                 await client.aclose()
 
     application = FastAPI(title="Namma Saathi", lifespan=lifespan)
+
+    async def accounts_unavailable(request: Request, exc: Exception) -> JSONResponse:
+        del request
+        log_event("database", op="request", outcome="unavailable", kind=type(exc).__name__)
+        return JSONResponse(status_code=503, content={"detail": UNAVAILABLE_MESSAGE})
+
+    for database_error in (AccountsUnavailable, psycopg.Error, PoolTimeout, sqlite3.Error):
+        application.add_exception_handler(database_error, accounts_unavailable)
     application.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     application.include_router(oauth_router(oauth_transport))
     application.include_router(account_router())
@@ -233,8 +251,7 @@ def create_app(
             for session_id, entry in list(sessions.items()):
                 if entry.owner == user_id:
                     del sessions[session_id]
-        live_conversation.pop(user_id, None)
-        user_budgets.pop(user_id, None)
+        current_conversation.pop(user_id, None)
         service = cast(AccountService | None, application.state.accounts)
         if service is not None:
             await service.drop_adapters(user_id)
@@ -292,15 +309,23 @@ def create_app(
         return cast(AccountService | None, getattr(request.app.state, "accounts", None))
 
     async def signed_in(request: Request) -> User | None:
+        """The signed-in person, or None. If accounts are down, they can still use the demo."""
         service = accounts_of(request)
-        return await service.current_user(request) if service is not None else None
+        if service is None:
+            return None
+        try:
+            return await service.current_user(request)
+        except AccountsUnavailable:
+            return None
 
     async def owned_session(request: Request) -> tuple[str, BrowserSession]:
         """A conversation, only for the person it belongs to. Others see it as not existing."""
         session_id = _session_id(request)
         entry = await _get_session(session_id, sessions, sessions_lock, session_ttl_seconds)
         if entry.owner is not None:
-            user = await signed_in(request)
+            service = accounts_of(request)
+            # Ownership must be proven, so a database outage is a 503, never a free pass.
+            user = await service.current_user(request) if service is not None else None
             if user is None or user.id != entry.owner:
                 log_event("request_refused", reason="not_owner")
                 raise HTTPException(
@@ -317,19 +342,67 @@ def create_app(
                 )
         return session_id, entry
 
-    def spend_turn(entry: BrowserSession) -> None:
-        """Live users have their own allowance, so a busy demo can't lock them out. Demo turns
-        share one, whoever makes them, so extra sign-ups can't get around it."""
-        settings_now = entry.settings
-        if entry.owner is not None and settings_now.commerce_backend == "swiggy":
-            allowance = user_budgets.setdefault(entry.owner, DemoBudget())
-            if not allowance.spend(settings_now.user_daily_turn_limit):
-                raise HTTPException(
-                    status_code=429,
-                    detail="You have reached today's limit. Please try again tomorrow.",
-                )
+    def spend_turn(settings_now: Settings, owner: str | None) -> None:
+        """Signed-in people have their own daily allowance, so a busy anonymous demo can't lock
+        them out. Everyone together stays under one site-wide ceiling, which also bounds anyone
+        who makes extra accounts to get more turns."""
+        if settings_now.public_deployment and not site_budget.spend(
+            settings_now.global_daily_turn_limit
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Saathi is very busy today and has paused for now. Please try tomorrow.",
+            )
+        if owner is None:
+            spend_public_budget(settings_now)
             return
-        spend_public_budget(settings_now)
+        allowance = user_budgets.setdefault(owner, DemoBudget())
+        if not allowance.spend(settings_now.user_daily_turn_limit):
+            raise HTTPException(
+                status_code=429,
+                detail="You have reached today's limit. Please try again tomorrow.",
+            )
+
+    async def remember(
+        request: Request, entry: BrowserSession, said: str, result: dict[str, object]
+    ) -> None:
+        """Keep a signed-in person's demo conversation and finished demo orders.
+
+        Best effort: a database hiccup never costs the person their reply. Live turns are not
+        kept, because their replies hold real addresses and orders, which live in Swiggy.
+        """
+        service = accounts_of(request)
+        if service is None or entry.owner is None or entry.settings.commerce_backend != "mock":
+            return
+        now = int(time.time() * 1000)
+        reply = str(result.get("assistant_text") or "")
+        try:
+            if said or reply:
+                await service.run(
+                    service.store.add_turn,
+                    entry.owner,
+                    Turn(now, entry.language, str(result.get("capability") or ""), said, reply),
+                )
+            ids = [str(item) for item in cast(list[object], result.get("order_ids") or [])]
+            fresh = [order_id for order_id in ids if order_id not in entry.recorded_orders]
+            if result.get("state") == "DONE" and fresh:
+                cart = cast(list[dict[str, object]], result.get("cart") or [])
+                capability = str(result.get("capability") or "")
+                summary = ", ".join(
+                    f"{line['name']} ({line['pack_size']})"
+                    if capability == "dining" or not line.get("quantity")
+                    else f"{line['quantity']} x {line['name']}"
+                    for line in cart
+                )
+                total = "0" if capability == "dining" else str(result.get("total_inr") or "0")
+                await service.run(
+                    service.store.add_demo_order,
+                    entry.owner,
+                    DemoOrder(now, capability, ", ".join(fresh), summary, total),
+                )
+                entry.recorded_orders.update(fresh)
+        except AccountsUnavailable:
+            log_event("history", outcome="not_saved")
 
     async def resolve_extractor() -> IntentExtractor:
         if extractor_factory is not None:
@@ -358,7 +431,7 @@ def create_app(
     ) -> dict[str, object]:
         runtime_settings = entry.settings
         reply = await entry.assistant.turn(text, heard=_heard_readback(request, runtime_settings))
-        return await _response_payload(
+        result = await _response_payload(
             entry,
             reply,
             runtime_settings,
@@ -367,6 +440,8 @@ def create_app(
             transcript=text,
             timer=timer,
         )
+        await remember(request, entry, text, result)
+        return result
 
     @application.get("/healthz", include_in_schema=False)
     async def healthz(request: Request) -> dict[str, object]:
@@ -392,10 +467,15 @@ def create_app(
         if service is None:
             return JSONResponse({"status": "ok", "database": "none", "multi_user_live": live})
         try:
+            if not await service.ensure_ready():
+                raise AccountsUnavailable(UNAVAILABLE_MESSAGE)
             await asyncio.to_thread(service.database.ping)
         except Exception:
             log_event("readiness", outcome="database_unreachable")
-            return JSONResponse(status_code=503, content={"status": "database_unreachable"})
+            # The demo still works; only accounts are waiting. /healthz stays green for that.
+            return JSONResponse(
+                status_code=503, content={"status": "database_unreachable", "demo": "ok"}
+            )
         return JSONResponse(
             {"status": "ok", "database": service.database.dialect, "multi_user_live": live}
         )
@@ -485,15 +565,15 @@ def create_app(
             runtime_settings = base_settings
         else:
             runtime_settings = session_settings(base_settings)
-        if runtime_settings.public_deployment and len(sessions) >= (
-            runtime_settings.public_max_sessions
-        ):
+        # Anonymous conversations share a cap. A signed-in person has one conversation at a
+        # time, which replaces their previous one, so they are bounded by the number of people.
+        if user is None and runtime_settings.public_deployment:
             async with sessions_lock:
                 _remove_expired_sessions(sessions, session_ttl_seconds)
-            if len(sessions) >= runtime_settings.public_max_sessions:
+                anonymous = sum(entry.owner is None for entry in sessions.values())
+            if anonymous >= runtime_settings.public_max_sessions:
                 raise HTTPException(status_code=429, detail="The demo is busy. Please try shortly.")
-        if live_user is None:
-            spend_public_budget(runtime_settings)
+        spend_turn(runtime_settings, user.id if user else None)
         try:
             extractor = await resolve_extractor()
             if live_user is not None and service is not None:
@@ -580,19 +660,36 @@ def create_app(
         async with sessions_lock:
             _remove_expired_sessions(sessions, session_ttl_seconds)
             sessions[session_id] = entry
-            if live_user is not None:
-                # A Swiggy account has one cart, so two live conversations would overwrite it.
-                earlier = live_conversation.get(live_user.id)
-                if earlier is not None:
+            if user is not None:
+                # One conversation per person, reachable from any of their devices. For live use
+                # this also matters for safety: a Swiggy account has one cart to overwrite.
+                earlier = current_conversation.get(user.id)
+                if earlier is not None and earlier != session_id:
                     sessions.pop(earlier, None)
-                live_conversation[live_user.id] = session_id
-        return await _response_payload(
+                current_conversation[user.id] = session_id
+        if user is not None and service is not None:
+            try:
+                await service.run(service.store.set_language, user.id, payload.language)
+            except AccountsUnavailable:
+                log_event("preferences", outcome="not_saved")
+        result = await _response_payload(
             entry,
             reply,
             runtime_settings,
             tts_factory,
             session_id=session_id,
         )
+        await remember(request, entry, "", result)
+        return result
+
+    @application.get("/api/session/current")
+    async def current_session(request: Request) -> dict[str, object]:
+        """A signed-in person's conversation, so another tab or device can carry it on."""
+        user = await signed_in(request)
+        session_id = current_conversation.get(user.id) if user else None
+        if session_id is None or session_id not in sessions:
+            return {"session_id": None}
+        return {"session_id": session_id}
 
     @application.get("/api/session")
     async def get_session(request: Request) -> dict[str, object]:
@@ -620,7 +717,7 @@ def create_app(
             )
         audio_bytes = await _read_bounded_audio(request)
         runtime_settings = entry.settings
-        spend_turn(entry)
+        spend_turn(runtime_settings, entry.owner)
 
         async with entry.lock:
             entry.last_activity = time.monotonic()
@@ -650,7 +747,7 @@ def create_app(
             raise HTTPException(status_code=422, detail="Type what you would like.")
         if len(text) > MAX_TYPED_CHARACTERS:
             raise HTTPException(status_code=413, detail="Please keep it shorter.")
-        spend_turn(entry)
+        spend_turn(entry.settings, entry.owner)
         async with entry.lock:
             entry.last_activity = time.monotonic()
             timer = begin_turn()
@@ -668,7 +765,7 @@ def create_app(
     ) -> dict[str, object] | JSONResponse:
         session_id, entry = await owned_session(request)
         runtime_settings = entry.settings
-        spend_turn(entry)
+        spend_turn(runtime_settings, entry.owner)
         async with entry.lock:
             entry.last_activity = time.monotonic()
             begin_turn()
@@ -706,13 +803,15 @@ def create_app(
                 reply = await _run_action(entry.assistant.resume(payload.capability))
             else:
                 reply = await _run_action(entry.assistant.cancel())
-            return await _response_payload(
+            result = await _response_payload(
                 entry,
                 reply,
                 runtime_settings,
                 tts_factory,
                 session_id=session_id,
             )
+            await remember(request, entry, f"[{payload.action}]", result)
+            return result
 
     return application
 

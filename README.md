@@ -16,8 +16,9 @@ for you. A yes only ever applies to what Saathi just read back.
 
 > **Project status:** all three journeys work end to end on built-in mock shops, with real speech and
 > a real LLM. **No real order or booking has been placed.** Live Swiggy access is limited to what is
-> listed under [Status](#status), and Swiggy has not granted production access. Accounts and per-user
-> Swiggy connections are built and tested against a stand-in Swiggy, not yet against the real one.
+> listed under [Status](#status), and Swiggy has not granted production access. People can sign up and
+> use all three demo journeys with their own history and demo orders, which needs no Swiggy access.
+> Per-user Swiggy connections are built and tested against a stand-in Swiggy, not the real one.
 
 ## Why it is built this way
 
@@ -176,6 +177,8 @@ Everything real is off unless switched on. [.env.example](.env.example) lists ev
 | `TOKEN_ENCRYPTION_KEYS` | none | Encrypts stored Swiggy tokens; required with a database |
 | `MULTI_USER_LIVE` | `false` | Real Swiggy for signed-in, approved users. Everyone else gets labelled mock shops |
 | `REAL_ORDER_DAILY_LIMIT` | none | Real orders and bookings per person per day |
+| `USER_DAILY_TURN_LIMIT` | `200` | Turns per signed-in person per day |
+| `GLOBAL_DAILY_TURN_LIMIT` | `5000` | Turns per day for the whole public site |
 
 ## Known limitations
 
@@ -188,7 +191,8 @@ Everything real is off unless switched on. [.env.example](.env.example) lists ev
 - **Payment:** cash on delivery only.
 - **Voice:** tested with synthesized speech, not yet with people at a microphone. Kannada and Hindi
   phrases need review by native speakers. Hinglish goes through `hi-IN`.
-- **Sessions:** in memory, so a restart loses the conversation but not the journal. One server
+- **Sessions:** an unfinished basket is in memory, so a restart loses it. Accounts, history, and
+  finished orders are in the database. One server
   process only. See [docs/production-activation.md](docs/production-activation.md#known-limits).
 - **Speed:** measured with real services on 5 November 2026, a spoken turn usually took 2 to 4 seconds
   when Groq answered and about 1 second for a yes, which skips the LLM. A speech recognition retry

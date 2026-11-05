@@ -10,3 +10,4 @@ dist/
 *~
 var/
 *.mp4
+.neon

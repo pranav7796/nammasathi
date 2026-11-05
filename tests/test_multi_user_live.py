@@ -802,20 +802,22 @@ async def test_revoking_live_access_ends_the_conversation_on_its_next_turn(
         assert "checkout" not in w.fake.tools_called()
 
 
-async def test_a_demo_turn_by_a_signed_in_person_spends_the_shared_allowance(
+async def test_a_busy_anonymous_demo_does_not_lock_out_signed_in_people(
     database_url: str,
 ) -> None:
-    settings = live_settings(database_url, public_daily_turn_limit=2, public_deployment=True)
+    settings = live_settings(database_url, public_daily_turn_limit=1, public_deployment=True)
     async with world(settings) as w:
-        first, second = w.person(), w.person()
-        await first.register("first@example.com")
-        await second.register("second@example.com")
-        await first.start(live=False)  # one
-        await second.start(live=False)  # two
-        over = await second.http.post(
-            "/api/session/text", json={"text": "Rice"}, headers=second.request_headers()
+        visitor, member = w.person(), w.person()
+        await visitor.start(live=False)  # spends the whole anonymous allowance
+        refused = await visitor.http.post(
+            "/api/sessions", json={"language": "en-IN", "live": False}
         )
-        assert over.status_code == 429
+        assert refused.status_code == 429
+        await member.register("member@example.com")
+        started = await member.start(live=False)
+        assert started["commerce_mode"] == "mock"
+        reply = await member.say("Two kilos of rice and one litre of milk")
+        assert reply["state"] == "READBACK"
 
 
 # The journal on a real database

@@ -44,7 +44,8 @@ send email through a provider that offers another port, such as 2525 (`SMTP_PORT
    ```
 
 3. In Render, add `DATABASE_URL`, `TOKEN_ENCRYPTION_KEYS`, and `SUPPORT_EMAIL`. Accounts turn on and
-   the site stays on mock shops.
+   the site stays on mock shops. **This step is the launch for real people; it does not wait for
+   Swiggy.** See [deployment.md](deployment.md#turning-on-accounts).
 4. Optional: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`. Without them,
    use `accounts_admin verify` and `reset-link` by hand. **This SMTP code has only run against a
    fake mailer in tests, so send yourself a reset email to prove it.**
@@ -140,8 +141,9 @@ the time when reporting a failure. Security issues go to security@swiggy.in.
 
 ## Known limits
 
-- **One server process.** Conversations and login-attempt counts are in memory, so a restart ends
-  conversations (never orders: those are in the database). Do not scale past one instance yet. The
+- **One server process.** Unfinished baskets, rate-limit counts, and daily allowances are in memory,
+  so a restart ends an unfinished basket and resets the counts. Accounts, history, demo orders, and
+  real orders are in the database. Do not scale past one instance yet. The
   order journal and token rows are safe across processes, but token refresh is locked per process.
 - **The address limit is not trustworthy behind a proxy**, since `X-Forwarded-For` can be forged. The
   per-account limit still holds.

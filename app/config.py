@@ -60,6 +60,7 @@ class Settings:
     multi_user_live: bool = False
     real_order_daily_limit: int | None = None
     user_daily_turn_limit: int = 200
+    global_daily_turn_limit: int = 5000
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
@@ -214,6 +215,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             _positive_int(values, "REAL_ORDER_DAILY_LIMIT", 1) if raw_daily else None
         ),
         user_daily_turn_limit=_positive_int(values, "USER_DAILY_TURN_LIMIT", 200),
+        global_daily_turn_limit=_positive_int(values, "GLOBAL_DAILY_TURN_LIMIT", 5000),
         smtp_host=smtp_host,
         smtp_port=_positive_int(values, "SMTP_PORT", 587),
         smtp_username=values.get("SMTP_USERNAME", "").strip(),

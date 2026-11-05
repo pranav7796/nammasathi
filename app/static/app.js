@@ -683,7 +683,17 @@ function sendChoice(index) {
 }
 
 async function restoreConversation() {
-  if (!sessionId) return;
+  if (!sessionId) {
+    // A signed-in person's conversation follows them to another tab or device.
+    try {
+      const current = await requestJson("/api/session/current");
+      if (!current.session_id) return;
+      sessionId = current.session_id;
+      sessionStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+    } catch {
+      return;
+    }
+  }
   try {
     const data = await requestJson("/api/session");
     showConversation();
@@ -696,6 +706,13 @@ async function restoreConversation() {
     handleExpired(error);
   }
 }
+
+// account.js calls this with a signed-in person's saved language, before they start.
+window.saathiSetLanguage = (code) => {
+  if (sessionId || !["kn-IN", "hi-IN", "en-IN"].includes(code)) return;
+  languageSelect.value = code;
+  showLanguage();
+};
 
 // account.js calls this. A failed address read leaves the start button off, so nothing is assumed.
 window.saathiSetLive = (useLive) => {
