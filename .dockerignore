@@ -1,0 +1,15 @@
+.git
+.github
+.agents
+.env
+.env.*
+.venv
+var
+voice-output
+tests
+docs
+*.wav
+*.mp4
+__pycache__
+.pytest_cache
+.ruff_cache

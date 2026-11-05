@@ -50,6 +50,7 @@ const scriptedNote = document.querySelector("#scripted-note");
 const publicNote = document.querySelector("#public-note");
 const timingsNode = document.querySelector("#timings");
 const SHOW_TIMINGS = (window.location?.search || "").includes("timings");
+const TYPE_ONLY = (window.location?.search || "").includes("typed");
 
 let sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
 let recorder = null;
@@ -370,7 +371,8 @@ async function startConversation() {
     pageStatus.textContent = "Could not start the conversation.";
   } finally {
     setBusy(false);
-    if (shouldRecord) void beginRecording();
+    // A browser with no microphone can still type, so a failed automatic start stays quiet.
+    if (shouldRecord && !TYPE_ONLY) void beginRecording({ quiet: true });
   }
 }
 
@@ -444,11 +446,11 @@ function encodeWav(chunks, sampleRate) {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-async function beginRecording() {
+async function beginRecording({ quiet = false } = {}) {
   if (microphonePending || busy || !sessionId) return;
   showError("");
   if (!navigator.mediaDevices?.getUserMedia) {
-    showError("Microphone recording is unavailable in this browser. Open this page on localhost or HTTPS.");
+    if (!quiet) showError("Microphone recording is unavailable in this browser. Open this page on localhost or HTTPS.");
     return;
   }
   microphonePending = true;
@@ -479,7 +481,7 @@ async function beginRecording() {
     recordingStatus.classList.add("is-recording");
     recorder.timer = window.setTimeout(() => finishRecording(), MAX_RECORDING_MS);
   } catch (error) {
-    showError(error.message || "Saathi could not use the microphone. Check microphone permission and try again.");
+    if (!quiet) showError(error.message || "Saathi could not use the microphone. Check microphone permission and try again.");
   } finally {
     microphonePending = false;
   }

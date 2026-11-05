@@ -20,7 +20,9 @@ Deterministic code owns every decision. Namma Saathi grew out of Ajji Mart, a gr
 | Swiggy Dineout | Works | Search and slots verified | Not applicable | Never run |
 
 Swiggy has not confirmed that a personal app may place real orders. See
-[docs/first-real-order.md](docs/first-real-order.md) and
+[docs/integration-status.md](docs/integration-status.md) for each step,
+[docs/first-real-order.md](docs/first-real-order.md),
+[docs/deployment.md](docs/deployment.md) for the public demo, and
 [docs/swiggy-application.md](docs/swiggy-application.md).
 
 ## Run it
@@ -59,6 +61,9 @@ log requests, so it is disabled when a real account is configured.
 uv run python -m app.swiggy_auth        # sign in to Swiggy; the token stays in the OS keyring
 uv run python -m app.swiggy_preflight   # read-only readiness report for Instamart
 uv run python -m app.order_admin status # every attempt in the journal, and how to settle one
+uv run python -m app.demo_check --voice # rehearse every journey with real speech, on mock shops
+uv run --with playwright python scripts/record_demo.py demo.mp4  # record a demo
+uv run python scripts/verify_deployment.py https://…   # check a deployment, print its redirect URI
 ```
 
 ## How real actions stay safe
@@ -98,6 +103,10 @@ Tests can't reach the network or the OS credential store: `tests/conftest.py` ma
 - **Payment:** cash on delivery only.
 - **Voice:** tested with synthesized speech, not yet with people at a microphone. Kannada and Hindi
   phrases need review by native speakers. Hinglish goes through `hi-IN`.
-- **Sessions:** in memory, so a restart loses the conversation but not the journal. One user, one
-  process, on this machine.
-- **Speed:** a turn can take 5 to 40 seconds, and an unclear checkout about 30 seconds more.
+- **Sessions:** in memory, so a restart loses the conversation but not the journal. A real account
+  means one user, one process, on this machine.
+- **Speed:** measured with real services on 5 November 2026, a spoken turn took 1 to 4 seconds when
+  Groq answered and 0.9 to 1.1 seconds for a yes, which skips the LLM. Groq's free tier rate-limits
+  quickly, and Gemini then takes 5 to 13 seconds. An unclear real checkout adds about 30 seconds.
+- **Hosted demo:** mock shops only. The hosted Swiggy sign-in stops at the callback and has only run
+  against a stand-in server; live ordering per hosted user is not built.

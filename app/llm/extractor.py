@@ -950,8 +950,11 @@ def _prompt(text: str, language: str) -> str:
         "cannot be told. For a meal with no dish named, such as wanting something for dinner, use "
         "domain food with needs_clarification true. Dishes use add_items. "
         "For a table use intent book_table with query (one cuisine or restaurant name), area "
-        "(city or neighbourhood), date as YYYY-MM-DD, time as 24-hour HH:MM, and guests, leaving "
-        "anything the user did not say as null. Users may mix Kannada, Hindi, and English. "
+        "(city or neighbourhood, always in English letters, so इंदिरानगर and ಇಂದಿರಾನಗರ become "
+        "Indiranagar), date as YYYY-MM-DD, time as 24-hour HH:MM, and guests, leaving anything "
+        "the user did not say as null. A table time with no morning or evening named means the "
+        "evening or lunchtime, whichever fits, so seven or 07:00 becomes 19:00 and one becomes "
+        "13:00. Users may mix Kannada, Hindi, and English. "
         "For remove_items include the item with quantity 1 when no quantity is given.\n\n"
         f"User text: {text}"
     )

@@ -1,0 +1,25 @@
+# A public demo with mock shops, on Render's free plan. See docs/deployment.md.
+services:
+  - type: web
+    name: namma-saathi
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    healthCheckPath: /healthz
+    envVars:
+      - key: PUBLIC_DEPLOYMENT
+        value: "true"
+      - key: COMMERCE_BACKEND
+        value: mock
+      - key: DEMO_UNDERSTANDING
+        value: fallback
+      - key: PUBLIC_DAILY_TURN_LIMIT
+        value: "300"
+      # PUBLIC_BASE_URL comes from Render's own RENDER_EXTERNAL_URL.
+      - key: GNANI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

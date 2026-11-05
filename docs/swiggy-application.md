@@ -6,40 +6,44 @@ refusal, and keep this file free of tokens, addresses, and phone numbers.
 
 ## Form answers
 
+Check every answer against the current state before submitting. Fill in these yourself: full name,
+email, LinkedIn, the terms acknowledgement (only after reading the terms), and the **Legal Details**
+section. That section asks for your government-ID name, date of birth, PAN, address, business
+category, and agreement email, and Swiggy sends an agreement to e-sign.
+
 | Field | Answer |
 |---|---|
 | Are you applying as | Individual Developer |
 | Team / Project Name | Namma Saathi |
-| MCP servers | Swiggy Food, Swiggy Instamart, Swiggy Dineout |
+| GitHub or Portfolio URL | The public repository URL, once published |
+| Which MCP servers | Swiggy Food, Swiggy Instamart, Swiggy Dineout |
 | Integration type | AI Agent / Copilot |
+| Production Redirect URI | The URI printed by `scripts/verify_deployment.py`. Never guess it |
 | Expected request volume | < 1K/day |
-| Production redirect URI | None. This is a local-only application and has no deployed callback yet. |
-
-Fill in personally: full name, email, GitHub or portfolio, LinkedIn, the terms
-acknowledgement (only after reading the terms), and the video link.
+| Demo video link | The link, after the upload checklist in `docs/demo-script.md` |
 
 ### What are you building?
 
 ```text
-Namma Saathi is a voice-first personal assistant that gets everyday tasks done for people speaking Kannada, Hindi, or English: ordering groceries from Instamart, ordering a meal from Swiggy Food, and reserving a table on Dineout. I'm building it as an individual developer, and it is also my entry in the Gnani AI Great Indian AI Internship Challenge.
+Namma Saathi is a voice-first personal assistant for everyday tasks, for people who would rather speak than navigate an app, including older family members. It understands Kannada, Hindi, and English. One assistant orders groceries from Instamart, orders a meal from Swiggy Food, and reserves a table on Dineout. I'm building it as an individual developer, and it is also my entry in the Gnani AI Great Indian AI Internship Challenge.
 
-Flow: the user says what they need, and Saathi picks the right service and asks a question if something is unclear. It reads back the exact items or booking, prices, fees, total, address, and payment, and acts only after an explicit yes.
+Flow: the user says what they need, and Saathi picks the right service and asks if something is unclear. It reads back the exact items or booking, prices, fees, total, address, and payment, and acts only after an explicit yes. If the user switches tasks, for example from groceries to a table, the first task waits, and a yes only applies to what was just read back.
 
-Safety: the LLM only interprets language and has no access to Swiggy tools. Deterministic code controls carts, checkout, and bookings. Approval is tied to exactly what was read back, existing carts are preserved, and nothing is retried automatically. Unclear outcomes block further real actions until a person resolves them.
+Safety: the LLM only interprets language and has no access to Swiggy tools. Deterministic code controls carts, checkout, and bookings. Approval is tied to exactly what was read back, existing carts are kept, and checkout is never retried automatically. An unclear outcome blocks further real actions until a person resolves it.
 
-Current status: on 4 November 2026 I tested Instamart from localhost against the production server on my own account. Search, cart updates, and the spoken readback worked, and the total matched the Swiggy app. Checkout was disabled in the app, so no order has been placed. The test exposed a bug in cancelling a basket, which I fixed afterwards but have not yet re-tested live. For Food and Dineout I have used read tools only, and the full journeys run against built-in mock services.
+Current status: all three journeys work end to end on built-in mock shops, in all three languages, with real speech and a real LLM. That is what the video shows, and it is labelled as mock. Against the real Swiggy servers from localhost, on my own account, I have used search, slots, and order history on all three, and on 4 November 2026 one Instamart rehearsal updated my real cart and read back a total that matched the Swiggy app. No real order or booking has been placed, and the Food cart, Food ordering, table booking, and Instamart checkout paths have not yet run against Swiggy.
 
-Use and access: it runs on my machine for my own Swiggy account. There are no other users yet. I would like to place one small cash-on-delivery test order and book one free table. Please confirm whether I may do that, what approval this needs, and whether staging is required first. I would also like to know what agenticPaymentEligible=false means for a COD order.
+Access: I'm asking for staging access first, using the redirect URI above. The deployed site currently serves the mock demo and the OAuth callback; connecting a real user's account there is what I will build and test on staging. Please also tell me what agenticPaymentEligible=false means for a cash-on-delivery order.
 ```
 
 ### Tech stack and architecture
 
 ```text
-Python 3 and FastAPI with a browser push-to-talk front end. Speech uses Gnani Prisma (STT) and Timbre (TTS). Intent extraction uses Gemini, with Groq as a fallback, and validates output against a strict schema. A pure state machine decides every cart and order action.
+Python 3.12 and FastAPI with a browser push-to-talk page, deployed in Docker over HTTPS. Speech uses Gnani Prisma (STT) and Timbre (TTS). Intent extraction uses Groq first and Gemini second, each with a short deadline, validated against a strict schema. Pure state machines decide every cart, order, and booking action; the LLM cannot trigger any of them.
 
-MCP: the official Python MCP SDK over Streamable HTTP to the Instamart server, with one long-lived session. OAuth 2.1 with PKCE and Dynamic Client Registration, with tokens in the OS keychain. Each server has its own allowlist of tools, covering search, cart, cash-on-delivery checkout, free table booking, order history, and tracking. Paid Dineout deals and UPI are not used.
+MCP: the official Python MCP SDK over Streamable HTTP to the Instamart, Food, and Dineout servers, with one long-lived session per server and a tool allowlist per server. OAuth 2.1 with PKCE and Dynamic Client Registration, with state checked at the callback. 401 and 429 have explicit handling, and an uncertain checkout is reconciled against order history before anything else can happen, never blindly retried. Cash on delivery and free table reservations only; no UPI or paid deals.
 
-Data: spoken requests and catalogue product names go to the LLM providers. The text read aloud, including cart contents and delivery address, goes to Gnani. Addresses and phone numbers are not sent to the LLM or written to logs. The local order journal stores only order IDs, totals, product names, hashes, and Swiggy's refusal reason if there is one.
+Data: spoken requests and catalogue names go to the LLM providers. The text read aloud, including cart contents and delivery address, goes to Gnani. Addresses and phone numbers are not sent to the LLM or written to logs. Hosted tokens stay in memory only, and the local order journal stores only order IDs, totals, product names, hashes, and refusal reasons.
 ```
 
 ## Also listed on the access page
@@ -49,20 +53,13 @@ Have them ready in case Swiggy follows up.
 
 | Item | Answer |
 |---|---|
-| Static IP or gateway IP | None; a local machine on a home connection |
+| Static IP or gateway IP | None. The hosted demo sends no Swiggy tool calls; live use is from a local machine on a home connection |
 | Security contact | Your email |
 | Data handling and privacy declaration | The data paragraph above; nothing is stored beyond the journal and logs described |
-| Environment and infrastructure | One process on one machine; API accepts only local requests in live mode |
+| Environment and infrastructure | Hosted: one Docker service on Render, mock shops only. Live: one process on my machine, accepting only local requests |
 | Security audit, SOC 2, ISO 27001 | Optional; none |
-| Traffic and scaling plan | Optional; one user, a few orders at most |
+| Traffic and scaling plan | Optional; a handful of test users, a few orders at most, and a daily cap on the public demo |
 
 ## Demo video
 
-Public link, 1 to 2 minutes:
-
-1. Show the running app and the commerce badge.
-2. Do one request in Kannada or Hindi, including Saathi asking which one you want. See docs/demo-script.md.
-3. Show the full readback, then say yes.
-4. Show the result and say plainly whether it is the mock shop or the real test order.
-
-Keep `.env`, tokens, your real address, phone number, and order details off screen.
+See the script and both checklists in [demo-script.md](demo-script.md).

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.config import ConfigurationError, Settings, load_settings
+from app.dining.workflow import known_area
 from app.llm.chain import ChainedExtractor, ProviderStep, build_extractor
 from app.llm.extractor import ClarificationContext, GroceryIntent, IntentExtractionError
 from app.llm.scripted import ScriptedExtractor
@@ -220,6 +222,24 @@ def test_timer_counts_time_outside_named_stages_as_orchestration() -> None:
     assert report["orchestration"] >= 0
 
 
+@pytest.mark.parametrize("spoken", ["Indiranagar", "इंदिरानगर", "ಇಂದಿರಾನಗರ", "ಇಂದಿರಾನಗರದಲ್ಲಿ"])
+def test_a_place_is_recognised_in_any_script(spoken: str) -> None:
+    assert known_area(spoken) == (12.9784, 77.6408)
+
+
+def test_an_unknown_place_is_not_guessed() -> None:
+    assert known_area("Atlantis") is None
+
+
+async def test_slot_dates_are_spoken_as_dates() -> None:
+    async with running(SCRIPTED) as client:
+        chat = Conversation(client)
+        await chat.start()
+        await chat.say("Book a table for two in Indiranagar tomorrow at nine, Italian")
+        reply = await chat.say("First")
+        assert not re.search(r"\d{4}-\d{2}-\d{2}", str(reply["assistant_text"]))
+
+
 # Provider chain.
 
 
@@ -362,6 +382,11 @@ def test_public_deployment_loads_when_it_is_safe() -> None:
     settings = load_settings({"PUBLIC_DEPLOYMENT": "true", "PUBLIC_BASE_URL": BASE})
     assert settings.public_deployment
     assert settings.commerce_backend == "mock"
+
+
+def test_public_address_can_come_from_the_host() -> None:
+    settings = load_settings({"PUBLIC_DEPLOYMENT": "true", "RENDER_EXTERNAL_URL": BASE})
+    assert settings.public_base_url == BASE
 
 
 # The public demo's limits.

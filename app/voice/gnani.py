@@ -48,6 +48,15 @@ class PrismaSTT:
         self.timeout = timeout
 
     async def transcribe(self, path: str | Path) -> PrismaTranscript:
+        """Transcribing changes nothing, so one retry after a brief outage is safe."""
+        try:
+            return await self._transcribe_once(path)
+        except GnaniError as exc:
+            if exc.category not in {"service", "connection", "timeout"}:
+                raise
+        return await self._transcribe_once(path)
+
+    async def _transcribe_once(self, path: str | Path) -> PrismaTranscript:
         audio_path = _validate_audio_path(path)
         _validate_wav_duration(audio_path)
         try:

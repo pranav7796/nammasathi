@@ -29,16 +29,28 @@ from app.web import create_app
 JOURNEYS: dict[str, dict[str, tuple[str, ...]]] = {
     "en-IN": {
         "Groceries": ("Two kilos of rice and one litre of milk", "Yes"),
+        "Groceries, then a table": (
+            "Two kilos of rice and one litre of milk",
+            "Book a table for two in Indiranagar tomorrow at seven PM, Italian",
+            "First",
+            "Yes",
+            "Back to my groceries",
+            "Yes",
+        ),
         "Meal": ("I want something for dinner", "Chicken biryani", "The second one", "Yes"),
-        "Table": ("Book a table for two in Indiranagar tomorrow at seven, Italian", "First", "Yes"),
+        "Table": (
+            "Book a table for two in Indiranagar tomorrow at seven PM, Italian",
+            "First",
+            "Yes",
+        ),
     },
     "hi-IN": {
         "Groceries": ("दो किलो चावल और एक लीटर दूध", "हाँ"),
-        "Table": ("कल सात बजे इंदिरानगर में दो लोगों के लिए इटालियन टेबल बुक करो", "पहला", "हाँ"),
+        "Table": ("कल शाम सात बजे इंदिरानगर में दो लोगों के लिए इटालियन टेबल बुक करो", "पहला", "हाँ"),
     },
     "kn-IN": {
         "Groceries": ("ಎರಡು ಕೆಜಿ ಅಕ್ಕಿ ಮತ್ತು ಒಂದು ಲೀಟರ್ ಹಾಲು", "ಹೌದು"),
-        "Table": ("ನಾಳೆ ಏಳು ಗಂಟೆಗೆ ಇಂದಿರಾನಗರದಲ್ಲಿ ಇಬ್ಬರಿಗೆ ಇಟಾಲಿಯನ್ ಟೇಬಲ್ ಬುಕ್ ಮಾಡಿ", "ಮೊದಲನೆಯದು", "ಹೌದು"),
+        "Table": ("ನಾಳೆ ಸಂಜೆ ಏಳು ಗಂಟೆಗೆ ಇಂದಿರಾನಗರದಲ್ಲಿ ಇಬ್ಬರಿಗೆ ಇಟಾಲಿಯನ್ ಟೇಬಲ್ ಬುಕ್ ಮಾಡಿ", "ಮೊದಲನೆಯದು", "ಹೌದು"),
     },
 }
 STAGES = ("stt", "understanding", "provider", "orchestration", "speech", "total")
@@ -89,7 +101,8 @@ async def run_journey(
         else:
             response = await client.post("/api/session/text", json={"text": text}, headers=headers)
         if response.status_code != 200:
-            rows.append(Row(text, f"HTTP {response.status_code}", "", {}))
+            detail = response.json().get("detail", "")
+            rows.append(Row(text, f"HTTP {response.status_code}: {detail}", "", {}))
             return rows, False
         body = response.json()
         state = body["state"]
@@ -98,7 +111,9 @@ async def run_journey(
                 "X-Heard-Cart-Version": str(body["cart_version"]),
                 "X-Heard-Cart-Hash": body["cart_hash"],
             }
-        rows.append(Row(text, state, body.get("understood_by") or "direct", body["timings_ms"]))
+        by = body.get("understood_by") or "direct"
+        rows.append(Row(text, state, by, body["timings_ms"]))
+        print(f"  heard: {body.get('transcript')}\n  said: {body.get('assistant_text')}")
         # A real silent gap between turns keeps a free-tier rate limit from ending the rehearsal.
         await asyncio.sleep(4)
     return rows, state == "DONE"

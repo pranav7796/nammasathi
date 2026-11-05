@@ -133,7 +133,7 @@ _PHRASES: dict[str, dict[str, str]] = {
         "dining_option_restaurant": "ये मिले हैं।",
         "dining_option_slot": "ये समय पास में हैं।",
         "dining_option": "{position}, {name}, {detail}।",
-        "dining_readback": "{restaurant}, {area} में {guests} लोगों की टेबल, {date} को {time} बजे। यह मुफ़्त बुकिंग है, अभी कुछ नहीं देना। क्या बुक कर दूँ?",
+        "dining_readback": "{restaurant}, {area} में {guests} लोगों की टेबल, {date} को {time} पर। यह मुफ़्त बुकिंग है, अभी कुछ नहीं देना। क्या बुक कर दूँ?",
         "dining_booked": "आपकी डेमो टेबल बुक हो गई। यह असली बुकिंग नहीं थी।",
         "dining_booked_real": "आपकी टेबल बुक हो गई है और मैंने स्विगी से इसकी जाँच कर ली है।",
         "dining_booking_unverified": "आपकी डेमो टेबल बुक हुई, पर मैं जाँच नहीं कर पाई।",
@@ -382,6 +382,11 @@ def _spoken_pack(pack: str) -> str:
     return re.sub(r"\s*[x×]\s*", ", ", pack)
 
 
+def _spoken_date(text: str) -> str:
+    # Gnani's text normalization reads DD/MM/YYYY as a date, but not an ISO date.
+    return re.sub(r"\b(\d{4})-(\d{2})-(\d{2})\b", r"\3/\2/\1", text)
+
+
 def _render_lines(say: Say, phrases: dict[str, str]) -> str:
     parts: list[str] = []
     for line in say.lines:
@@ -438,7 +443,7 @@ def _render_dining_options(say: Say, phrases: dict[str, str], language: str) -> 
     for position, option in zip(_POSITIONS[language], say.lines, strict=False):
         parts.append(
             phrases["dining_option"].format(
-                position=position, name=option.name, detail=option.pack_size
+                position=position, name=option.name, detail=_spoken_date(option.pack_size)
             )
         )
     parts.append(phrases["options_prompt"])

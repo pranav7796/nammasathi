@@ -10,8 +10,8 @@ from app.dining.base import BookingResult, BookingStatus, DiningRestaurant, Tabl
 
 _RESTAURANTS = (
     DiningRestaurant("d1", "Toscano", "Indiranagar", "₹1800 for two"),
-    DiningRestaurant("d2", "Olive Bistro", "Koramangala", "₹2200 for two"),
-    DiningRestaurant("d3", "Karavalli", "Residency Road", "₹3000 for two"),
+    DiningRestaurant("d2", "Olive Bistro", "Indiranagar", "₹2200 for two"),
+    DiningRestaurant("d3", "Trattoria Roma", "Indiranagar", "₹3000 for two"),
 )
 _TIMES = (
     ("12:30", "12:30 PM"),

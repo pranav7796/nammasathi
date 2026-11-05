@@ -70,12 +70,25 @@ KNOWN_AREAS: dict[str, tuple[float, float]] = {
     "ಕೋರಮಂಗಲ": (12.9352, 77.6245),
     "indiranagar": (12.9784, 77.6408),
     "ಇಂದಿರಾನಗರ": (12.9784, 77.6408),
+    "इंदिरानगर": (12.9784, 77.6408),
+    "कोरमंगला": (12.9352, 77.6245),
     "mumbai": (19.0760, 72.8777),
     "मुंबई": (19.0760, 72.8777),
     "delhi": (28.6139, 77.2090),
     "दिल्ली": (28.6139, 77.2090),
 }
 _PROBLEM_WORDS = ("cancel", "fail", "reject")
+
+
+def known_area(spoken: str) -> tuple[float, float] | None:
+    """Exact first, then contained, since Kannada attaches endings such as ಇಂದಿರಾನಗರದಲ್ಲಿ."""
+    lowered = spoken.casefold().strip()
+    if lowered in KNOWN_AREAS:
+        return KNOWN_AREAS[lowered]
+    for name, location in KNOWN_AREAS.items():
+        if name in lowered:
+            return location
+    return None
 
 
 class DiningWorkflow:
@@ -143,7 +156,7 @@ class DiningWorkflow:
         session = self.session
         try:
             if isinstance(effect, ResolveArea):
-                location = KNOWN_AREAS.get(effect.area.casefold().strip())
+                location = known_area(effect.area)
                 return AreaResolved(*location) if location else AreaResolved(None)
             if isinstance(effect, SearchRestaurants):
                 found = await self.adapter.search(effect.query, session.latitude, session.longitude)

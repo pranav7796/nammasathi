@@ -158,7 +158,10 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     if demo_understanding != "llm" and backend != "mock":
         raise ConfigurationError("Scripted understanding is only allowed with the mock backend")
     public_deployment = _flag(values, "PUBLIC_DEPLOYMENT")
-    public_base_url = values.get("PUBLIC_BASE_URL", "").strip()
+    # Render sets RENDER_EXTERNAL_URL to this service's own https:// address.
+    public_base_url = (
+        values.get("PUBLIC_BASE_URL", "").strip() or values.get("RENDER_EXTERNAL_URL", "").strip()
+    )
     if public_deployment:
         _check_public_deployment(
             backend,

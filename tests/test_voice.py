@@ -97,10 +97,34 @@ async def test_prisma_errors_are_classified(
 ) -> None:
     path = tmp_path / "turn.wav"
     path.write_bytes(wav_bytes())
-    patch_httpx(monkeypatch, [response(status)])
+    patch_httpx(monkeypatch, [response(status), response(status)])
     with pytest.raises(GnaniError) as error:
         await PrismaSTT("secret", language="kn-IN").transcribe(path)
     assert error.value.category == category
+
+
+@pytest.mark.asyncio
+async def test_prisma_retries_once_after_a_brief_outage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "turn.wav"
+    path.write_bytes(wav_bytes())
+    ok = response(200, json_body={"success": True, "transcript": "ಹಾಲು"})
+    patch_httpx(monkeypatch, [response(503), ok])
+    result = await PrismaSTT("secret", language="kn-IN").transcribe(path)
+    assert result.text == "ಹಾಲು"
+
+
+@pytest.mark.asyncio
+async def test_prisma_does_not_retry_a_refusal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "turn.wav"
+    path.write_bytes(wav_bytes())
+    ok = response(200, json_body={"success": True, "transcript": "ಹಾಲು"})
+    patch_httpx(monkeypatch, [response(401), ok])
+    with pytest.raises(GnaniError):
+        await PrismaSTT("secret", language="kn-IN").transcribe(path)
 
 
 @pytest.mark.asyncio
