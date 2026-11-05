@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import time
 import wave
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -495,7 +496,7 @@ async def test_oversized_audio_and_expired_session_are_rejected() -> None:
         )
         assert oversized.status_code == 413
 
-        app.state.sessions[session_id].last_activity = 0
+        app.state.sessions[session_id].last_activity = time.monotonic() - 24 * 60 * 60
         expired = await client.get("/api/session", headers=_session_headers(session_id))
         assert expired.status_code == 410
 
