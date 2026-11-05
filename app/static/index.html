@@ -18,6 +18,7 @@
       </header>
 
       <p id="error-message" class="error-message" role="alert" hidden></p>
+      <p id="scripted-note" class="scripted-note" role="status" hidden>Mock mode, scripted understanding: no LLM was used for this turn.</p>
 
       <section class="panel home-panel" aria-labelledby="start-heading">
         <p class="eyebrow">Namaste · ನಮಸ್ಕಾರ</p>
@@ -38,6 +39,7 @@
         </button>
         <p class="how-to">Tap once and speak clearly. Tap <strong>Finish speaking</strong> when you are done. You can say one item or several.</p>
         <p id="commerce-note" class="demo-note">This is a demo. Orders are not sent to a shop.</p>
+        <p id="public-note" class="demo-note" hidden>Public demo with mock shops. Nothing here reaches Swiggy, and no order or booking is real.</p>
       </section>
 
       <section id="conversation" class="conversation" aria-label="Your conversation with Saathi" hidden>
@@ -50,7 +52,19 @@
           <button id="record-button" class="mic-button" type="button" aria-pressed="false" aria-label="Start recording">
             <span class="mic-symbol" aria-hidden="true">🎙</span><span id="record-label">Speak to Saathi</span>
           </button>
+          <form id="text-form" class="text-form">
+            <label for="text-input">Or type it</label>
+            <div class="text-row">
+              <input id="text-input" type="text" maxlength="400" autocomplete="off" placeholder="Two kilos of rice and one litre of milk">
+              <button id="text-send" class="secondary-button" type="submit">Send</button>
+            </div>
+          </form>
           <p class="voice-help">For example: “milk and bread”, “something for dinner”, or “a table for two on Friday.” Recordings stop after 30 seconds.</p>
+        </section>
+
+        <section id="tasks-panel" class="tasks-panel" aria-label="What Saathi is holding for you" hidden>
+          <p class="eyebrow">Your tasks</p>
+          <ul id="tasks-list" class="tasks-list"></ul>
         </section>
 
         <div class="conversation-grid">
@@ -106,6 +120,7 @@
         <button id="new-session-button" class="text-button" type="button">Start a new conversation</button>
       </section>
       <p id="page-status" class="page-status" role="status" aria-live="polite"></p>
+      <p id="timings" class="small-note" hidden></p>
     </main>
   </body>
 </html>

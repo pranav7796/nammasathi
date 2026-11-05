@@ -68,6 +68,7 @@ from app.commerce.base import (
 )
 from app.commerce.units import parse_pack_size
 from app.observability import log_event
+from app.timing import stage
 
 SWIGGY_MCP_URL = "https://mcp.swiggy.com/im"
 # https://mcp.swiggy.com/builders/docs/operate/access.md documents
@@ -546,7 +547,8 @@ class SwiggyMcpClient:
         status = "error"
         timeout = _CHECKOUT_TIMEOUT_SECONDS if name == "checkout" else _TOOL_TIMEOUT_SECONDS
         try:
-            result = await self._send(name, arguments, timeout)
+            with stage("provider"):
+                result = await self._send(name, arguments, timeout)
             data, message = _parse_result(name, result)
             status = "ok"
             return data, message, _result_text(result)

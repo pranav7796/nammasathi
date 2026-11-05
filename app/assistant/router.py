@@ -47,6 +47,25 @@ _FOOD_WORDS = (
 )
 
 
+_BACK_WORDS = ("back to", "go back", "return to", "wapas", "वापस", "ವಾಪಸ್", "ಮತ್ತೆ")
+_TASK_WORDS: dict[Domain, tuple[str, ...]] = {
+    "grocery": ("grocer", "basket", "kirana", "किराना", "टोकरी", "ದಿನಸಿ", "ಬುಟ್ಟಿ"),
+    "food": ("meal", "food", "khana", "खाना", "ಊಟ"),
+    "dining": ("table", "booking", "टेबल", "ಟೇಬಲ್"),
+}
+
+
+def resume_domain(text: str) -> Domain | None:
+    """Only an explicit "back to my groceries" returns to a waiting task."""
+    lowered = text.casefold()
+    if not any(word in lowered for word in _BACK_WORDS):
+        return None
+    for domain, words in _TASK_WORDS.items():
+        if any(word in lowered for word in words):
+            return domain
+    return None
+
+
 def keyword_domain(text: str) -> Domain | None:
     lowered = text.casefold()
     if any(word in lowered for word in _DINING_WORDS):

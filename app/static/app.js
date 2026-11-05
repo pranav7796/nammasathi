@@ -41,6 +41,15 @@ const orderResult = document.querySelector("#order-result");
 const orderIds = document.querySelector("#order-ids");
 const catalogueNote = document.querySelector("#catalogue-note");
 const cartHeading = document.querySelector("#cart-heading");
+const tasksPanel = document.querySelector("#tasks-panel");
+const tasksList = document.querySelector("#tasks-list");
+const textForm = document.querySelector("#text-form");
+const textInput = document.querySelector("#text-input");
+const textSend = document.querySelector("#text-send");
+const scriptedNote = document.querySelector("#scripted-note");
+const publicNote = document.querySelector("#public-note");
+const timingsNode = document.querySelector("#timings");
+const SHOW_TIMINGS = (window.location?.search || "").includes("timings");
 
 let sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
 let recorder = null;
@@ -55,6 +64,7 @@ function setBusy(value) {
   busy = value;
   startButton.disabled = value || !addressSelect.value;
   recordButton.disabled = value || !sessionId;
+  textSend.disabled = value || !sessionId;
   confirmButton.disabled = value || confirmButton.dataset.allowed !== "true";
   newSessionButton.disabled = value;
 }
@@ -80,7 +90,49 @@ languageSelect.addEventListener("change", () => {
 
 const CAPABILITY_TITLES = { grocery: "Your groceries", food: "Your meal", dining: "Your table" };
 
+const TASK_NAMES = { grocery: "Groceries", food: "Meal", dining: "Table" };
+
+function taskDetail(task, isMock) {
+  if (task.done) {
+    const noun = task.capability === "dining" ? "booked" : "ordered";
+    return isMock ? `Demo ${noun}` : `${noun[0].toUpperCase()}${noun.slice(1)}`;
+  }
+  if (task.state === "ORDER_UNKNOWN" || task.state === "UNKNOWN") return "Status unknown";
+  const parts = [];
+  if (task.capability !== "dining" && task.item_count) {
+    parts.push(`${task.item_count} ${task.item_count === 1 ? "item" : "items"}`, `₹${task.total_inr}`);
+  }
+  parts.push(task.active ? "Working on it" : task.open ? "Waiting" : "Nothing yet");
+  return parts.join(" · ");
+}
+
+function renderTasks(data) {
+  const tasks = data.tasks || [];
+  const isMock = data.commerce_mode !== "swiggy";
+  tasksPanel.hidden = tasks.length === 0;
+  tasksList.replaceChildren();
+  for (const task of tasks) {
+    const row = document.createElement("li");
+    row.className = task.active ? "task-row is-active" : "task-row";
+    const name = document.createElement("strong");
+    name.textContent = TASK_NAMES[task.capability] || task.capability;
+    const detail = document.createElement("span");
+    detail.textContent = taskDetail(task, isMock);
+    row.append(name, detail);
+    if (!task.active && task.open && !task.done) {
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "line-edit-button";
+      back.textContent = "Go back to this";
+      back.addEventListener("click", () => sendAction({ action: "resume", capability: task.capability }));
+      row.append(back);
+    }
+    tasksList.append(row);
+  }
+}
+
 function renderCart(data) {
+  renderTasks(data);
   const isDining = data.capability === "dining";
   cartHeading.textContent = CAPABILITY_TITLES[data.capability] || "Your task";
   catalogueNote.hidden = isDining;
@@ -238,6 +290,12 @@ function renderReply(data) {
   }
   assistantNode.textContent = data.assistant_text || "I am ready for your next turn.";
   renderCart(data);
+  scriptedNote.hidden = data.scripted_understanding !== true;
+  if (SHOW_TIMINGS && data.timings_ms) {
+    const t = data.timings_ms;
+    timingsNode.textContent = `Speech recognition ${t.stt} ms · understanding ${t.understanding} ms (${data.understood_by || "none"}) · provider ${t.provider} ms · orchestration ${t.orchestration} ms · speech ${t.speech} ms · total ${t.total} ms`;
+    timingsNode.hidden = false;
+  }
   document.querySelector("#language-status").textContent = `${displayLanguage(data.language || languageSelect.value)} selected`;
   audioNode.hidden = true;
   audioNote.hidden = true;
@@ -318,6 +376,7 @@ async function startConversation() {
 
 async function loadAddresses() {
   const data = await requestJson("/api/addresses");
+  publicNote.hidden = data.public_deployment !== true;
   addressSelect.replaceChildren();
   if (data.addresses.length > 1) {
     const placeholder = document.createElement("option");
@@ -423,6 +482,49 @@ async function beginRecording() {
     showError(error.message || "Saathi could not use the microphone. Check microphone permission and try again.");
   } finally {
     microphonePending = false;
+  }
+}
+
+async function discardRecording() {
+  if (!recorder) return;
+  const current = recorder;
+  recorder = null;
+  window.clearTimeout(current.timer);
+  current.processor.onaudioprocess = null;
+  current.source.disconnect();
+  current.processor.disconnect();
+  current.stream.getTracks().forEach((track) => track.stop());
+  await current.context.close();
+  recordButton.setAttribute("aria-pressed", "false");
+  recordButton.setAttribute("aria-label", "Start recording");
+  recordLabel.textContent = "Speak to Saathi";
+  recordingStatus.classList.remove("is-recording");
+}
+
+async function sendText(text) {
+  await discardRecording();
+  setBusy(true);
+  showError("");
+  pageStatus.textContent = "Saathi is preparing a reply…";
+  try {
+    const data = await requestJson("/api/session/text", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(heardReadback
+          ? { "X-Heard-Cart-Version": String(heardReadback.version), "X-Heard-Cart-Hash": heardReadback.hash }
+          : {}),
+      },
+      body: JSON.stringify({ text }),
+    });
+    textInput.value = "";
+    renderReply(data);
+    recordingStatus.textContent = "Ready for your next turn.";
+    pageStatus.textContent = "Your conversation is saved in this browser tab.";
+  } catch (error) {
+    if (!handleExpired(error)) showError(error.message);
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -534,6 +636,11 @@ recordButton.addEventListener("click", () => {
   if (busy) return;
   if (recorder) finishRecording();
   else beginRecording();
+});
+textForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const text = textInput.value.trim();
+  if (text && !busy && sessionId) void sendText(text);
 });
 confirmButton.addEventListener("click", () => sendAction());
 cancelButton.addEventListener("click", () => sendAction({ action: "cancel" }));

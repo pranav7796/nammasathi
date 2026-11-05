@@ -6,6 +6,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlsplit
 
 from app.commerce.swiggy import ALLOWED_MCP_URLS, SWIGGY_MCP_URL
 
@@ -41,7 +42,15 @@ class Settings:
     gnani_tts_model: str = "timbre-v2.5"
     gnani_tts_voice: str | None = None  # None selects each language's preferred voice
     gnani_tts_speed: float = 0.90
-    gnani_timeout_seconds: int = 60
+    gnani_timeout_seconds: int = 20
+    llm_primary: str = "groq"
+    llm_timeout_seconds: int = 10
+    # llm, fallback (scripted after every LLM fails), or scripted. Mock mode only.
+    demo_understanding: str = "llm"
+    public_deployment: bool = False
+    public_base_url: str = ""
+    public_daily_turn_limit: int = 300
+    public_max_sessions: int = 50
 
     def require_real_checkout(self) -> None:
         """Refuse an actual checkout unless explicitly enabled for Swiggy."""
@@ -132,14 +141,43 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         raise ConfigurationError("GNANI_TTS_SPEED must be between 0.85 and 1.15") from exc
     if not 0.85 <= tts_speed <= 1.15:
         raise ConfigurationError("GNANI_TTS_SPEED must be between 0.85 and 1.15")
-    raw_gnani_timeout = values.get("GNANI_TIMEOUT_SECONDS", "60").strip()
+    raw_gnani_timeout = values.get("GNANI_TIMEOUT_SECONDS", "20").strip()
     try:
         gnani_timeout = int(raw_gnani_timeout)
     except ValueError as exc:
         raise ConfigurationError("GNANI_TIMEOUT_SECONDS must be positive") from exc
     if gnani_timeout <= 0:
         raise ConfigurationError("GNANI_TIMEOUT_SECONDS must be positive")
+    llm_primary = values.get("LLM_PRIMARY", "groq").strip().lower()
+    if llm_primary not in {"groq", "gemini"}:
+        raise ConfigurationError("LLM_PRIMARY must be groq or gemini")
+    llm_timeout = _positive_int(values, "LLM_TIMEOUT_SECONDS", 10)
+    demo_understanding = values.get("DEMO_UNDERSTANDING", "llm").strip().lower()
+    if demo_understanding not in {"llm", "fallback", "scripted"}:
+        raise ConfigurationError("DEMO_UNDERSTANDING must be llm, fallback, or scripted")
+    if demo_understanding != "llm" and backend != "mock":
+        raise ConfigurationError("Scripted understanding is only allowed with the mock backend")
+    public_deployment = _flag(values, "PUBLIC_DEPLOYMENT")
+    public_base_url = values.get("PUBLIC_BASE_URL", "").strip()
+    if public_deployment:
+        _check_public_deployment(
+            backend,
+            public_base_url,
+            live_flags=(
+                swiggy_live_access,
+                allow_cart_writes,
+                allow_real_booking,
+                allow_real_checkout,
+            ),
+        )
     return Settings(
+        llm_primary=llm_primary,
+        llm_timeout_seconds=llm_timeout,
+        demo_understanding=demo_understanding,
+        public_deployment=public_deployment,
+        public_base_url=public_base_url,
+        public_daily_turn_limit=_positive_int(values, "PUBLIC_DAILY_TURN_LIMIT", 300),
+        public_max_sessions=_positive_int(values, "PUBLIC_MAX_SESSIONS", 50),
         commerce_backend=backend,
         swiggy_live_access=swiggy_live_access,
         allow_real_checkout=allow_real_checkout,
@@ -163,6 +201,25 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         gnani_tts_speed=tts_speed,
         gnani_timeout_seconds=gnani_timeout,
     )
+
+
+def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
+    try:
+        value = int(values.get(name, str(default)).strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise ConfigurationError(f"{name} must be a positive integer")
+    return value
+
+
+def _check_public_deployment(backend: str, base_url: str, *, live_flags: tuple[bool, ...]) -> None:
+    """A public server has no per-user account isolation, so it only ever runs the mock."""
+    if backend != "mock" or any(live_flags):
+        raise ConfigurationError("PUBLIC_DEPLOYMENT=true only runs with the mock backend")
+    parts = urlsplit(base_url)
+    if parts.scheme != "https" or not parts.hostname or parts.path not in {"", "/"}:
+        raise ConfigurationError("PUBLIC_BASE_URL must be an https:// origin with no path")
 
 
 def _positive_money(raw: str) -> Decimal | None:

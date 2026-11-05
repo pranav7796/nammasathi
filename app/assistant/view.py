@@ -30,3 +30,16 @@ class WorkflowView:
     order_status: str = ""
     order_verified: bool = False
     order_partial: bool = False
+
+
+@dataclass(frozen=True)
+class TaskView:
+    """One line of "what Saathi is holding for you", across every capability."""
+
+    domain: str
+    state: str
+    item_count: int
+    total_inr: Money
+    active: bool
+    open: bool
+    done: bool

@@ -214,8 +214,10 @@ class GeminiIntentExtractor:
         openrouter_api_key: str | None = None,
         openrouter_model: str = OPENROUTER_DEFAULT_MODEL,
         timeout_seconds: int = GEMINI_TIMEOUT_SECONDS,
+        max_attempts: int = GEMINI_MAX_ATTEMPTS,
     ) -> None:
         self.client = client
+        self.max_attempts = max_attempts
         self.model = model
         self.prompt_builder = prompt_builder or _prompt
         self.max_fallback_models = max_fallback_models
@@ -230,8 +232,19 @@ class GeminiIntentExtractor:
         self.selected_provider: str | None = None
 
     @classmethod
-    def from_env(cls, *, allow_logged_fallback: bool = True) -> GeminiIntentExtractor:
-        """`allow_logged_fallback=False` drops OpenRouter, whose free model may log requests."""
+    def from_env(
+        cls,
+        *,
+        allow_logged_fallback: bool = True,
+        provider_fallbacks: bool = True,
+        timeout_seconds: int | None = None,
+        max_fallback_models: int | None = None,
+        max_attempts: int = GEMINI_MAX_ATTEMPTS,
+    ) -> GeminiIntentExtractor:
+        """`allow_logged_fallback=False` drops OpenRouter, whose free model may log requests.
+
+        `provider_fallbacks=False` leaves failing over to `app.llm.chain`.
+        """
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise IntentExtractionError(
@@ -239,8 +252,10 @@ class GeminiIntentExtractor:
                 user_message="Gemini is not configured. Set GEMINI_API_KEY and try again.",
             )
         model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
-        timeout_seconds = _timeout_seconds_from_env()
-        max_fallback_models = _max_fallback_models_from_env()
+        if timeout_seconds is None:
+            timeout_seconds = _timeout_seconds_from_env()
+        if max_fallback_models is None:
+            max_fallback_models = _max_fallback_models_from_env()
         groq_model = os.environ.get("GROQ_MODEL", GROQ_DEFAULT_MODEL).strip()
         if not groq_model:
             raise IntentExtractionError(
@@ -274,15 +289,18 @@ class GeminiIntentExtractor:
             model=model,
             candidates=(),
             max_fallback_models=max_fallback_models,
-            groq_api_key=os.environ.get("GROQ_API_KEY", "").strip() or None,
+            groq_api_key=(
+                (os.environ.get("GROQ_API_KEY", "").strip() or None) if provider_fallbacks else None
+            ),
             groq_model=groq_model,
             openrouter_api_key=(
                 (os.environ.get("OPENROUTER_API_KEY", "").strip() or None)
-                if allow_logged_fallback
+                if allow_logged_fallback and provider_fallbacks
                 else None
             ),
             openrouter_model=openrouter_model,
             timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
         )
         try:
             extractor.refresh_models()
@@ -402,6 +420,16 @@ class GeminiIntentExtractor:
             "All compatible Gemini models rejected structured output",
             user_message="No available Gemini model supports the required structured output.",
         )
+
+    def extract_with_groq(
+        self, text: str, *, language: str, context: ClarificationContext | None = None
+    ) -> GroceryIntent:
+        return self._extract_with_groq(_with_context(text, context), language)
+
+    def extract_with_openrouter(
+        self, text: str, *, language: str, context: ClarificationContext | None = None
+    ) -> GroceryIntent:
+        return self._extract_with_openrouter(_with_context(text, context), language)
 
     def _extract_from_model(self, text: str, model: str, language: str) -> GroceryIntent:
         result = _parse_response(self._generate_content(text, model, language))
@@ -627,7 +655,7 @@ class GeminiIntentExtractor:
             response_mime_type="application/json",
             response_schema=_GEMINI_RESPONSE_SCHEMA,
         )
-        for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
+        for attempt in range(1, self.max_attempts + 1):
             try:
                 return self.client.models.generate_content(
                     model=model,
@@ -640,12 +668,12 @@ class GeminiIntentExtractor:
                 if (
                     _is_gemini_quota_exhausted(exc)
                     or exc.code not in _RETRYABLE_STATUS_CODES
-                    or attempt == GEMINI_MAX_ATTEMPTS
+                    or attempt == self.max_attempts
                 ):
                     raise
                 logger.info("Retrying transient Gemini API failure (attempt %d)", attempt + 1)
             except (httpx.RequestError, TimeoutError, ConnectionError):
-                if attempt == GEMINI_MAX_ATTEMPTS:
+                if attempt == self.max_attempts:
                     raise
                 logger.info("Retrying transient Gemini transport failure (attempt %d)", attempt + 1)
             _sleep_before_retry(attempt)

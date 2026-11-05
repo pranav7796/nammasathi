@@ -15,6 +15,7 @@ from app.orchestrator.state_machine import (
     State,
     UserCancelled,
     UserConfirmed,
+    UserDone,
 )
 from app.orchestrator.turn_runner import IntentExtractor, TextTurnRunner
 
@@ -88,6 +89,9 @@ class OrderWorkflow:
 
     async def cancel(self) -> list[Effect]:
         return await self._runner.dispatch(UserCancelled())
+
+    async def resume(self) -> list[Effect]:
+        return await self._runner.dispatch(UserDone())
 
     def context(self) -> ClarificationContext | None:
         return self._runner.clarification_context()

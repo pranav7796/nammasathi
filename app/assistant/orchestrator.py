@@ -13,8 +13,8 @@ from dataclasses import dataclass, replace
 from datetime import date as Date
 from typing import Protocol
 
-from app.assistant.router import DOMAINS, Domain, route
-from app.assistant.view import WorkflowView
+from app.assistant.router import DOMAINS, Domain, resume_domain, route
+from app.assistant.view import TaskView, WorkflowView
 from app.commerce.base import CommerceError
 from app.commerce.order_journal import JournalError, OrderJournal, unresolved_attempts
 from app.llm.extractor import ClarificationContext, GroceryIntent, IntentExtractionError
@@ -52,6 +52,8 @@ class Workflow(Protocol):
     async def choose(self, index: int) -> list[Effect]: ...
 
     async def cancel(self) -> list[Effect]: ...
+
+    async def resume(self) -> list[Effect]: ...
 
     def context(self) -> ClarificationContext | None: ...
 
@@ -130,6 +132,9 @@ class Assistant:
     async def turn(self, text: str, heard: tuple[int, str] | None = None) -> Reply:
         if self.blocked:
             return Reply([Say("order_unknown")], self.active or "")
+        requested = resume_domain(text)
+        if requested is not None and requested in self.workflows:
+            return await self.resume(requested)
         current = self.workflows.get(self.active) if self.active else None
         if current is not None:
             direct = await current.direct(text, heard)
@@ -206,6 +211,36 @@ class Assistant:
         if current is None or self.blocked:
             return Reply([Say("order_unknown" if self.blocked else "ask_domain")])
         return Reply(await current.cancel(), current.domain)
+
+    async def resume(self, domain: Domain) -> Reply:
+        """Return to a waiting task. It reads back afresh, so a yes applies to what was heard."""
+        workflow = self.workflows.get(domain)
+        if workflow is None or self.blocked or not workflow.has_open_task:
+            return Reply(
+                [Say("order_unknown" if self.blocked else "ask_domain")], self.active or ""
+            )
+        self.active = domain
+        return Reply(await workflow.resume(), domain)
+
+    def tasks(self) -> list[TaskView]:
+        tasks: list[TaskView] = []
+        for domain in DOMAINS:
+            workflow = self.workflows.get(domain)
+            if workflow is None:
+                continue
+            view = workflow.view()
+            tasks.append(
+                TaskView(
+                    domain=domain,
+                    state=view.state,
+                    item_count=len(view.lines),
+                    total_inr=view.total_inr,
+                    active=domain == self.active,
+                    open=workflow.has_open_task,
+                    done=workflow.finished,
+                )
+            )
+        return tasks
 
     def view(self) -> WorkflowView:
         current = self._current()

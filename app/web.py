@@ -10,13 +10,14 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from secrets import token_urlsafe
 from typing import Literal, cast
 from urllib.parse import urlsplit
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -45,10 +46,13 @@ from app.commerce.swiggy import SwiggyMcpClient
 from app.config import Settings, load_settings
 from app.dining.base import DiningAdapter
 from app.dining.workflow import DiningWorkflow
-from app.llm.extractor import GeminiIntentExtractor, IntentExtractionError
+from app.llm.chain import SCRIPTED, build_extractor
+from app.llm.extractor import IntentExtractionError
+from app.oauth_web import callback_url, oauth_router
 from app.observability import configure_logging, log_event
 from app.orchestrator.state_machine import Money, Say
-from app.orchestrator.turn_runner import TextTurnRunner
+from app.orchestrator.turn_runner import IntentExtractor, TextTurnRunner
+from app.timing import TurnTimer, begin_turn, stage
 from app.voice.gnani import (
     DEFAULT_VOICES,
     SUPPORTED_LANGUAGES,
@@ -59,6 +63,7 @@ from app.voice.gnani import (
 from app.voice.presentation import response_text, speech_error_text
 
 MAX_AUDIO_BYTES = 12 * 1024 * 1024
+MAX_TYPED_CHARACTERS = 400
 DEFAULT_SESSION_TTL_SECONDS = 30 * 60
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOOPBACK_CLIENTS = frozenset({"127.0.0.1", "::1"})
@@ -71,8 +76,13 @@ class StartSessionRequest(BaseModel):
     address_id: str | None = None
 
 
+class TextTurnRequest(BaseModel):
+    text: str
+
+
 class SessionActionRequest(BaseModel):
-    action: Literal["confirm", "cancel", "select_option"]
+    action: Literal["confirm", "cancel", "select_option", "resume"]
+    capability: Literal["grocery", "food", "dining"] | None = None
     cart_version: int | None = None
     cart_hash: str | None = None
     option_index: int | None = None
@@ -95,9 +105,26 @@ class BrowserSession:
         return workflow.runner
 
 
-ExtractorFactory = Callable[[], GeminiIntentExtractor]
+ExtractorFactory = Callable[[], IntentExtractor]
 STTFactory = Callable[[Settings, str], PrismaSTT]
 TTSFactory = Callable[[Settings, str], TimbreTTS]
+
+
+class DemoBudget:
+    """A public demo spends real speech and LLM quota, so it gets a fixed daily allowance."""
+
+    def __init__(self) -> None:
+        self.day = ""
+        self.used = 0
+
+    def spend(self, limit: int) -> bool:
+        today = datetime.now(UTC).date().isoformat()
+        if today != self.day:
+            self.day, self.used = today, 0
+        if self.used >= limit:
+            return False
+        self.used += 1
+        return True
 
 
 def create_app(
@@ -107,12 +134,14 @@ def create_app(
     stt_factory: STTFactory | None = None,
     tts_factory: TTSFactory | None = None,
     session_ttl_seconds: float = DEFAULT_SESSION_TTL_SECONDS,
+    oauth_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Create an isolated web app; factories make provider calls mockable in tests."""
     sessions: dict[str, BrowserSession] = {}
     sessions_lock = asyncio.Lock()
     extractor_lock = asyncio.Lock()
-    default_extractor: GeminiIntentExtractor | None = None
+    default_extractor: IntentExtractor | None = None
+    budget = DemoBudget()
     shared_adapter: CommerceAdapter | None = None
     shared_food: dict[str, CommerceAdapter] = {}
     shared_dining: DiningAdapter | None = None
@@ -166,6 +195,7 @@ def create_app(
 
     application = FastAPI(title="Namma Saathi", lifespan=lifespan)
     application.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    application.include_router(oauth_router(oauth_transport))
 
     @application.middleware("http")
     async def local_only_for_real_account(
@@ -181,17 +211,55 @@ def create_app(
             return JSONResponse(status_code=403, content={"detail": "Local access only."})
         return await call_next(request)
 
-    async def resolve_extractor() -> GeminiIntentExtractor:
+    async def resolve_extractor() -> IntentExtractor:
         if extractor_factory is not None:
             return extractor_factory()
         nonlocal default_extractor
         async with extractor_lock:
             if default_extractor is None:
-                allow_logged = cast(Settings, application.state.settings).commerce_backend == "mock"
-                default_extractor = await asyncio.to_thread(
-                    GeminiIntentExtractor.from_env, allow_logged_fallback=allow_logged
-                )
+                default_extractor = build_extractor(cast(Settings, application.state.settings))
             return default_extractor
+
+    def spend_public_budget(runtime_settings: Settings) -> None:
+        if runtime_settings.public_deployment and not budget.spend(
+            runtime_settings.public_daily_turn_limit
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="This public demo has used its allowance for today. Please try tomorrow.",
+            )
+
+    async def run_turn(
+        request: Request,
+        entry: BrowserSession,
+        session_id: str,
+        timer: TurnTimer,
+        text: str,
+    ) -> dict[str, object]:
+        runtime_settings = _get_settings(request)
+        reply = await entry.assistant.turn(text, heard=_heard_readback(request, runtime_settings))
+        return await _response_payload(
+            entry,
+            reply,
+            runtime_settings,
+            tts_factory,
+            session_id=session_id,
+            transcript=text,
+            timer=timer,
+        )
+
+    @application.get("/healthz", include_in_schema=False)
+    async def healthz(request: Request) -> dict[str, object]:
+        """For the host's health check. Says which mode this is and nothing else."""
+        runtime_settings = _get_settings(request)
+        return {
+            "status": "ok",
+            "commerce_mode": runtime_settings.commerce_backend,
+            "public_deployment": runtime_settings.public_deployment,
+            "oauth_callback": (
+                callback_url(runtime_settings) if runtime_settings.public_base_url else None
+            ),
+        }
 
     @application.get("/", include_in_schema=False)
     async def index() -> FileResponse:
@@ -211,6 +279,7 @@ def create_app(
             ) from exc
         return {
             "commerce_mode": _get_settings(request).commerce_backend,
+            "public_deployment": _get_settings(request).public_deployment,
             "checkout_enabled": (
                 _get_settings(request).commerce_backend == "mock"
                 or _get_settings(request).allow_real_checkout
@@ -224,6 +293,14 @@ def create_app(
     @application.post("/api/sessions")
     async def create_session(payload: StartSessionRequest, request: Request) -> dict[str, object]:
         runtime_settings = _get_settings(request)
+        if runtime_settings.public_deployment and len(sessions) >= (
+            runtime_settings.public_max_sessions
+        ):
+            async with sessions_lock:
+                _remove_expired_sessions(sessions, session_ttl_seconds)
+            if len(sessions) >= runtime_settings.public_max_sessions:
+                raise HTTPException(status_code=429, detail="The demo is busy. Please try shortly.")
+        spend_public_budget(runtime_settings)
         try:
             extractor = await resolve_extractor()
             grocery = adapter_for(runtime_settings)
@@ -326,28 +403,43 @@ def create_app(
             )
         audio_bytes = await _read_bounded_audio(request)
         runtime_settings = _get_settings(request)
+        spend_public_budget(runtime_settings)
 
         async with entry.lock:
             entry.last_activity = time.monotonic()
+            timer = begin_turn()
             try:
-                with tempfile.TemporaryDirectory(prefix="ajji-voice-") as temp_dir:
+                with tempfile.TemporaryDirectory(prefix="saathi-voice-") as temp_dir:
                     audio_path = Path(temp_dir) / "turn.wav"
                     audio_path.write_bytes(audio_bytes)
                     stt = (stt_factory or _default_stt_factory)(runtime_settings, entry.language)
-                    transcript = await stt.transcribe(audio_path)
-                    reply = await entry.assistant.turn(
-                        transcript.text, heard=_heard_readback(request, runtime_settings)
-                    )
-                    return await _response_payload(
-                        entry,
-                        reply,
-                        runtime_settings,
-                        tts_factory,
-                        session_id=session_id,
-                        transcript=transcript.text,
-                    )
+                    with stage("stt"):
+                        transcript = await stt.transcribe(audio_path)
+                    return await run_turn(request, entry, session_id, timer, transcript.text)
             except GnaniError as exc:
                 raise HTTPException(status_code=_gnani_status(exc), detail=str(exc)) from exc
+            except (IntentExtractionError, CommerceError) as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Saathi could not safely process that turn. Please try again.",
+                ) from exc
+
+    @application.post("/api/session/text")
+    async def typed_turn(payload: TextTurnRequest, request: Request) -> dict[str, object]:
+        """The same turn as a spoken one, minus speech recognition. The same approvals apply."""
+        session_id = _session_id(request)
+        entry = await _get_session(session_id, sessions, sessions_lock, session_ttl_seconds)
+        text = payload.text.strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="Type what you would like.")
+        if len(text) > MAX_TYPED_CHARACTERS:
+            raise HTTPException(status_code=413, detail="Please keep it shorter.")
+        spend_public_budget(_get_settings(request))
+        async with entry.lock:
+            entry.last_activity = time.monotonic()
+            timer = begin_turn()
+            try:
+                return await run_turn(request, entry, session_id, timer, text)
             except (IntentExtractionError, CommerceError) as exc:
                 raise HTTPException(
                     status_code=502,
@@ -361,8 +453,10 @@ def create_app(
         session_id = _session_id(request)
         entry = await _get_session(session_id, sessions, sessions_lock, session_ttl_seconds)
         runtime_settings = _get_settings(request)
+        spend_public_budget(runtime_settings)
         async with entry.lock:
             entry.last_activity = time.monotonic()
+            begin_turn()
             if payload.action == "confirm":
                 if payload.cart_version is None or payload.cart_hash is None:
                     raise HTTPException(
@@ -391,6 +485,10 @@ def create_app(
                 if payload.option_index is None:
                     raise HTTPException(status_code=422, detail="Choose one of the options.")
                 reply = await _run_action(entry.assistant.choose(payload.option_index))
+            elif payload.action == "resume":
+                if payload.capability is None:
+                    raise HTTPException(status_code=422, detail="Choose a task to go back to.")
+                reply = await _run_action(entry.assistant.resume(payload.capability))
             else:
                 reply = await _run_action(entry.assistant.cancel())
             return await _response_payload(
@@ -530,6 +628,19 @@ def _session_payload(
         "order_status": view.order_status,
         "order_verified": view.order_verified,
         "order_partial": view.order_partial,
+        "tasks": [
+            {
+                "capability": task.domain,
+                "state": task.state,
+                "item_count": task.item_count,
+                "total_inr": _money_json(task.total_inr),
+                "active": task.active,
+                "open": task.open,
+                "done": task.done,
+            }
+            for task in entry.assistant.tasks()
+        ],
+        "public_deployment": settings.public_deployment,
         "last_reply": entry.last_reply,
         "tts_language": entry.language,
     }
@@ -543,6 +654,7 @@ async def _response_payload(
     *,
     session_id: str,
     transcript: str | None = None,
+    timer: TurnTimer | None = None,
 ) -> dict[str, object]:
     message = response_text(
         reply.effects,
@@ -556,9 +668,10 @@ async def _response_payload(
     audio_error: str | None = None
     if message:
         try:
-            with tempfile.TemporaryDirectory(prefix="ajji-reply-") as temp_dir:
+            with tempfile.TemporaryDirectory(prefix="saathi-reply-") as temp_dir:
                 audio_path = (tts_factory or _default_tts_factory)(settings, entry.language)
-                output = await audio_path.synthesize(message, Path(temp_dir) / "reply.wav")
+                with stage("speech"):
+                    output = await audio_path.synthesize(message, Path(temp_dir) / "reply.wav")
                 audio_base64 = base64.b64encode(output.read_bytes()).decode("ascii")
         except GnaniError:
             audio_error = speech_error_text(entry.language)
@@ -578,6 +691,16 @@ async def _response_payload(
             "audio_error": audio_error,
         }
     )
+    if timer is not None:
+        timings = timer.report()
+        log_event(
+            "turn_timing",
+            understood_by=timer.understood_by or "none",
+            **{f"{name}_ms": value for name, value in timings.items()},
+        )
+        result["timings_ms"] = timings
+        result["understood_by"] = timer.understood_by
+        result["scripted_understanding"] = timer.understood_by == SCRIPTED
     return result
 
 

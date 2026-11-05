@@ -87,6 +87,11 @@ class Unclear:
 
 
 @dataclass(frozen=True)
+class Resumed:
+    """The user came back to this task; say where it stands without using up a re-ask."""
+
+
+@dataclass(frozen=True)
 class Confirmed:
     version: int
     digest: str
@@ -137,6 +142,7 @@ DiningEvent = (
     | SlotsFound
     | OptionChosen
     | Unclear
+    | Resumed
     | Confirmed
     | Rejected
     | Cancelled
@@ -278,6 +284,16 @@ def _reask(session: DiningSession) -> tuple[DiningSession, list[DiningEffect]]:
     return replace(session, reasks=session.reasks + 1), [says]
 
 
+def _resume(session: DiningSession) -> tuple[DiningSession, list[DiningEffect]]:
+    if session.state is DiningState.READBACK:
+        return _readback(session)
+    if session.state is DiningState.CHOOSING_RESTAURANT:
+        return session, [_options_say("restaurant", session.restaurants)]
+    if session.state is DiningState.CHOOSING_SLOT:
+        return session, [_options_say("slot", session.slots)]
+    return _ask_next(session)
+
+
 def _reset(session: DiningSession) -> DiningSession:
     return replace(
         _unbound(session),
@@ -339,6 +355,8 @@ def transition(
         return session, [Say("dining_already_booked")]
     if isinstance(event, Cancelled):
         return _reset(session), [Say("dining_cancelled")]
+    if isinstance(event, Resumed):
+        return _resume(session)
     if isinstance(event, DetailsGiven):
         return _details(session, event)
     if isinstance(event, AreaResolved):

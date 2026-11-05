@@ -107,3 +107,13 @@ audio { width: 100%; margin-top: 10px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.tasks-panel { margin: 0 0 1rem; }
+.tasks-list { list-style: none; margin: .25rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
+.task-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .5rem .75rem; border: 1px solid #d8cbb3; border-radius: .6rem; background: #fffdf8; }
+.task-row.is-active { border-color: #8a4b08; box-shadow: 0 0 0 1px #8a4b08 inset; }
+.text-form { margin-top: .75rem; }
+.text-form label { display: block; font-size: .9rem; margin-bottom: .25rem; }
+.text-row { display: flex; gap: .5rem; }
+.text-row input { flex: 1; min-width: 0; padding: .6rem .75rem; font: inherit; border: 1px solid #bcae95; border-radius: .5rem; }
+.scripted-note { margin: 0 0 1rem; padding: .6rem .8rem; border-radius: .5rem; background: #fff1c9; border: 1px solid #d9b44a; color: #4d3a00; }

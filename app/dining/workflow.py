@@ -42,6 +42,7 @@ from app.dining.state_machine import (
     Rejected,
     ResolveArea,
     RestaurantsFound,
+    Resumed,
     SearchRestaurants,
     SlotsFound,
     Unclear,
@@ -304,6 +305,9 @@ class DiningWorkflow:
 
     async def cancel(self) -> list[Effect]:
         return await self._dispatch(Cancelled())
+
+    async def resume(self) -> list[Effect]:
+        return await self._dispatch(Resumed())
 
     def view(self) -> WorkflowView:
         session = self.session
