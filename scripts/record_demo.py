@@ -279,6 +279,7 @@ def main() -> None:
         "ALLOW_REAL_CHECKOUT": "false",
         "ALLOW_REAL_BOOKING": "false",
         "DEMO_UNDERSTANDING": "fallback",
+        "GNANI_TTS_SPEED": "1.10",  # Keeps the video short; the app's default is slower.
     }
     server = subprocess.Popen(
         ["uv", "run", "uvicorn", "app.web:app", "--port", str(PORT), "--log-level", "warning"],

@@ -108,7 +108,8 @@ audio { width: 100%; margin-top: 10px; }
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
-.tasks-panel { margin: 0 0 1rem; }
+.tasks-panel { position: sticky; top: 0; z-index: 5; margin: 0 0 1rem; padding: .5rem 0; background: #fff8ec; }
+.tasks-mode { font-weight: 400; text-transform: none; letter-spacing: 0; }
 .tasks-list { list-style: none; margin: .25rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
 .task-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .5rem .75rem; border: 1px solid #d8cbb3; border-radius: .6rem; background: #fffdf8; }
 .task-row.is-active { border-color: #8a4b08; box-shadow: 0 0 0 1px #8a4b08 inset; }

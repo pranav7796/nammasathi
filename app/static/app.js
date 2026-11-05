@@ -43,6 +43,9 @@ const catalogueNote = document.querySelector("#catalogue-note");
 const cartHeading = document.querySelector("#cart-heading");
 const tasksPanel = document.querySelector("#tasks-panel");
 const tasksList = document.querySelector("#tasks-list");
+const tasksMode = document.querySelector("#tasks-mode");
+const confirmEyebrow = document.querySelector("#confirm-eyebrow");
+const confirmationAddressLabel = document.querySelector("#confirmation-address-label");
 const textForm = document.querySelector("#text-form");
 const textInput = document.querySelector("#text-input");
 const textSend = document.querySelector("#text-send");
@@ -111,6 +114,7 @@ function renderTasks(data) {
   const tasks = data.tasks || [];
   const isMock = data.commerce_mode !== "swiggy";
   tasksPanel.hidden = tasks.length === 0;
+  tasksMode.textContent = isMock ? "· Demo: mock shops, nothing is real" : "· Live Swiggy account";
   tasksList.replaceChildren();
   for (const task of tasks) {
     const row = document.createElement("li");
@@ -217,6 +221,8 @@ function renderCart(data) {
       data.fees_inr ? `fees ₹${data.fees_inr}` : "",
     ].filter(Boolean).join(", ");
     confirmationTotal.textContent = isDining ? "Free reservation" : bill ? `₹${data.total_inr} (${bill})` : `₹${data.total_inr}`;
+    confirmEyebrow.textContent = isDining ? "Please check before booking" : "Please check before ordering";
+    confirmationAddressLabel.textContent = isDining ? "Area" : "Delivery address";
     confirmationAddress.textContent = data.delivery_address || data.address_label || "No delivery address is set";
     const payment = data.payment_method === "COD"
       ? "Cash on delivery"
@@ -244,7 +250,9 @@ function renderCart(data) {
     }
   }
   confirmButton.disabled = busy || !canConfirm;
-  confirmNote.textContent = "Please review every item, the total, address, and payment method.";
+  confirmNote.textContent = isDining
+    ? "Please review the restaurant, date, time, and number of people."
+    : "Please review every item, the total, address, and payment method.";
 }
 
 function renderOptions(data) {

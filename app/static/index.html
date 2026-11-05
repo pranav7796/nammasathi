@@ -63,7 +63,7 @@
         </section>
 
         <section id="tasks-panel" class="tasks-panel" aria-label="What Saathi is holding for you" hidden>
-          <p class="eyebrow">Your tasks</p>
+          <p class="eyebrow">Your tasks <span id="tasks-mode" class="tasks-mode"></span></p>
           <ul id="tasks-list" class="tasks-list"></ul>
         </section>
 
@@ -100,13 +100,13 @@
         </section>
 
         <section id="confirmation-panel" class="panel confirmation-panel" aria-labelledby="confirm-heading" hidden>
-          <p class="eyebrow">Please check before ordering</p>
+          <p id="confirm-eyebrow" class="eyebrow">Please check before ordering</p>
           <h2 id="confirm-heading">Is this correct?</h2>
           <p id="confirmation-intro" class="confirmation-intro">Saathi will place this demo order only after you choose Confirm order.</p>
           <ul id="confirmation-items" class="confirmation-items"></ul>
           <dl class="order-details">
             <div><dt>Total</dt><dd id="confirmation-total">₹0</dd></div>
-            <div><dt>Delivery address</dt><dd id="confirmation-address">Your saved address</dd></div>
+            <div><dt id="confirmation-address-label">Delivery address</dt><dd id="confirmation-address">Your saved address</dd></div>
             <div><dt>Payment</dt><dd id="confirmation-payment">Cash on delivery (demo)</dd></div>
           </dl>
           <p id="confirm-note" class="confirm-note">Please review every item, the total, address, and payment method.</p>
