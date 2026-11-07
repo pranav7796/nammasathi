@@ -95,7 +95,23 @@ function displayLanguage(code) {
   return ({ "kn-IN": "ಕನ್ನಡ · Kannada", "hi-IN": "हिन्दी · Hindi", "en-IN": "English" })[code] || code;
 }
 
+// Phrases the demo is known to handle, shown so a first-time visitor knows what to say.
+const TRY_SAYING = {
+  "kn-IN": ["ಎರಡು ಕೆಜಿ ಅಕ್ಕಿ ಮತ್ತು ಒಂದು ಲೀಟರ್ ಹಾಲು", "ರಾತ್ರಿ ಊಟಕ್ಕೆ ಏನಾದರೂ ಬೇಕು"],
+  "hi-IN": ["दो किलो चावल और एक लीटर दूध", "कल शाम सात बजे इंदिरानगर में दो लोगों के लिए इटालियन टेबल बुक करो"],
+  "en-IN": ["Two kilos of rice and one litre of milk", "Book a table for two in Indiranagar tomorrow at 7 PM, Italian"],
+};
+
+function showTrySaying() {
+  const lines = TRY_SAYING[languageSelect.value] || [];
+  for (const [id, text] of [["#try-one", lines[0]], ["#try-two", lines[1]]]) {
+    const node = document.querySelector(id);
+    if (node) node.textContent = text ? `\u201C${text}\u201D` : "";
+  }
+}
+
 function showLanguage() {
+  showTrySaying();
   selectedLanguage.textContent = displayLanguage(languageSelect.value);
   for (const choice of languageChoices.children) {
     choice.setAttribute("aria-pressed", String(choice.dataset.lang === languageSelect.value));
