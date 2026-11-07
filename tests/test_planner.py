@@ -252,7 +252,12 @@ async def test_empty_and_unrelated_text_gives_an_empty_plan() -> None:
 
 
 def test_plan_dataclasses_carry_only_declared_fields() -> None:
-    assert [f.name for f in dataclasses.fields(Plan)] == ["tasks", "clarification", "source"]
+    assert [f.name for f in dataclasses.fields(Plan)] == [
+        "tasks",
+        "clarification",
+        "source",
+        "pending",
+    ]
     assert [f.name for f in dataclasses.fields(PlannedTask)] == ["kind", "args", "depends_on"]
 
 

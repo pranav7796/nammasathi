@@ -70,6 +70,7 @@ from app.llm.extractor import IntentExtractionError
 from app.memory.routes import memory_router
 from app.oauth_web import callback_url, oauth_router
 from app.observability import configure_logging, log_event
+from app.orchestrator.confirmation import explicit_confirmation
 from app.orchestrator.state_machine import Money, Say
 from app.orchestrator.turn_runner import IntentExtractor, TextTurnRunner
 from app.personal import voice as reminder_voice
@@ -140,6 +141,11 @@ class BrowserSession:
     last_reply: str = ""
     owner: str | None = None  # the signed-in user, who alone may use this conversation
     recorded_orders: set[str] = field(default_factory=set[str])
+    # Which workflow the person is in now: "order" (groceries, food, tables), whatsapp, email,
+    # calendar, reminders, day, tasks (a mixed board), or "none" before anything has been asked.
+    # The page shows that workflow's panel. An unfinished order is kept, not shown, meanwhile.
+    workflow: str = "none"
+    waiting_for: str | None = None
 
     @property
     def runner(self) -> TextTurnRunner:
@@ -530,6 +536,8 @@ def create_app(
                         if planned.plan_id
                         else None
                     ),
+                    workflow=planned.workflow,
+                    waiting_for=planned.waiting_for,
                 )
         spoken_reminder = await reminder_turn(request, entry, text)
         if spoken_reminder is not None:
@@ -544,6 +552,25 @@ def create_app(
                 timer=timer,
                 message_override=message,
                 ui=widgets,
+                workflow="reminders",
+            )
+        if (
+            entry.workflow not in ("order", "none")
+            and entry.assistant.view().state == "READBACK"
+            and explicit_confirmation(text) is True
+        ):
+            # A bare "yes" while another workflow is on screen must not confirm a paused order.
+            return await _response_payload(
+                entry,
+                None,
+                runtime_settings,
+                tts_factory,
+                session_id=session_id,
+                transcript=text,
+                timer=timer,
+                message_override=task_turn.stray_confirmation_reply(entry.language),
+                workflow=entry.workflow,
+                waiting_for=entry.waiting_for,
             )
         reply = await entry.assistant.turn(text, heard=_heard_readback(request, runtime_settings))
         result = await _response_payload(
@@ -793,6 +820,7 @@ def create_app(
             runtime_settings,
             tts_factory,
             session_id=session_id,
+            workflow="none",  # the greeting is not an order
         )
         await remember(request, entry, "", result)
         return result
@@ -1043,8 +1071,10 @@ def _session_payload(
         }
         for line in view.lines
     ]
+    in_order = entry.workflow in ("order", "none")
     return {
         "session_id": session_id,
+        "workflow": {"kind": entry.workflow, "waiting_for": entry.waiting_for},
         "capability": view.domain,
         "state": view.state,
         "language": entry.language,
@@ -1061,8 +1091,9 @@ def _session_payload(
         "payment_method": view.payment_method,
         "commerce_mode": settings.commerce_backend,
         "checkout_enabled": checkout_enabled,
-        "show_readback": view.state == "READBACK" and bool(view.lines),
-        "can_confirm": checkout_enabled and view.confirmable,
+        # A paused order is kept but not offered while another workflow is on screen.
+        "show_readback": in_order and view.state == "READBACK" and bool(view.lines),
+        "can_confirm": in_order and checkout_enabled and view.confirmable,
         "options": [
             {
                 "name": option.name,
@@ -1070,7 +1101,7 @@ def _session_payload(
                 "quantity": option.quantity,
                 "unit_price_inr": _money_json(option.unit_price_inr),
             }
-            for option in view.options
+            for option in (view.options if in_order else ())
         ],
         "order_ids": list(view.order_ids),
         "order_status": view.order_status,
@@ -1152,8 +1183,14 @@ async def _response_payload(
     message_override: str | None = None,
     ui: list[Widget] | None = None,
     plan: dict[str, object] | None = None,
+    workflow: str | None = None,
+    waiting_for: str | None = None,
 ) -> dict[str, object]:
     """`message_override` and `ui` serve turns the ordering assistant did not handle."""
+    if workflow is not None:
+        entry.workflow, entry.waiting_for = workflow, waiting_for
+    elif reply is not None:
+        entry.workflow, entry.waiting_for = "order", None  # the ordering assistant handled it
     if message_override is not None:
         message = message_override
     else:

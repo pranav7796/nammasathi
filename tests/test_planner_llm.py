@@ -184,7 +184,7 @@ async def test_a_model_that_obeys_can_still_propose_gmail_send_so_approval_is_th
     )
     assert [t.kind for t in p.tasks] == ["gmail.send"]
     assert CATALOGUE["gmail.send"].side_effect is True
-    assert set(vars(p)) == {"tasks", "clarification", "source"}
+    assert set(vars(p)) == {"tasks", "clarification", "source", "pending"}
     assert set(vars(p.tasks[0])) == {"kind", "args", "depends_on"}
 
 

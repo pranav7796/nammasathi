@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from app.observability import log_event
 from app.tasks import rules
 from app.tasks.kinds import UnknownKind, validate_args
+from app.tasks.pending import Pending
 
 MAX_TASKS = 6
 LLM_DEADLINE_SECONDS = 20.0
@@ -37,6 +38,7 @@ class Plan:
     tasks: tuple[PlannedTask, ...]
     clarification: str | None = None
     source: str = "rules"
+    pending: Pending | None = None  # the question to remember, when one detail is missing
 
 
 class PlanExtractor(Protocol):
@@ -184,8 +186,14 @@ async def make_plan(
     tasks = _normalise(result.tasks[:MAX_TASKS], text) or []
     final = _finish(tasks)
     question = result.clarifications[0] if result.clarifications else None
+    pending = result.pending[0] if result.pending and not final else None
     log_event("plan", op="rules", outcome="ok" if final else "empty", items=len(final))
-    return Plan(tuple(final), question, "rules")
+    return Plan(tuple(final), question, "rules", pending)
+
+
+def complete(tasks: list[PlannedTask]) -> Plan:
+    """A plan from tasks that are now complete (an answer filled the missing detail)."""
+    return Plan(tuple(_finish(tasks)), None, "rules")
 
 
 # ---- the cheap check the web layer runs first --------------------------------------------------

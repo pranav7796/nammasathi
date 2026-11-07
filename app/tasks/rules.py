@@ -15,6 +15,7 @@ from datetime import datetime
 from app.personal.dates import IST, parse_when
 from app.personal.voice import reminder_request
 from app.tasks.kinds import is_phone
+from app.tasks.pending import Pending
 
 _W = r"[\wऀ-ॿಀ-೿]"
 _B0 = rf"(?<!{_W})"
@@ -279,6 +280,9 @@ def _good_name(name: str, *, allow_phone: bool) -> str | None:
     return name
 
 
+good_name = _good_name  # for the turn handler, which fills a missing recipient from an answer
+
+
 def _kn_strip_dative(word: str) -> str:
     word = word.replace("‌", "")
     for suffix in ("ನಿಗೆ", "ಗೆ"):
@@ -341,6 +345,11 @@ def _message_parts(clause: str) -> tuple[str | None, str | None]:
 class RulesResult:
     tasks: list[dict[str, object]] = field(default_factory=lambda: [])
     clarifications: list[str] = field(default_factory=lambda: [])
+    pending: list[Pending] = field(default_factory=lambda: [])
+
+    def ask(self, pending: Pending) -> None:
+        self.pending.append(pending)
+        self.clarifications.append(pending.question)
 
 
 # ---- per-kind builders -----------------------------------------------------------------------
@@ -484,7 +493,14 @@ def _calendar(clause: str, now: datetime, out: RulesResult) -> None:
     slot = _slot(clause, now)
     if _AVAILABILITY.search(clause) and not creating:
         if slot is None:
-            out.clarifications.append("Which day and time should I check?")
+            out.ask(
+                Pending(
+                    "calendar.availability",
+                    "when",
+                    {"minutes": _minutes(clause)},
+                    "Which day and time should I check?",
+                )
+            )
             return
         out.tasks.append(
             {
@@ -499,7 +515,18 @@ def _calendar(clause: str, now: datetime, out: RulesResult) -> None:
             if isinstance(earlier, dict):
                 slot = (str(earlier["date"]), str(earlier["start"]))  # pyright: ignore[reportUnknownArgumentType]
         if slot is None:
-            out.clarifications.append("When should I schedule it?")
+            out.ask(
+                Pending(
+                    "calendar.create",
+                    "when",
+                    {
+                        "title": _event_title(clause),
+                        "minutes": _minutes(clause),
+                        "attendees": [],
+                    },
+                    "When should I schedule it?",
+                )
+            )
             return
         out.tasks.append(
             {
@@ -567,6 +594,12 @@ _DRAFT_EN = [
 ]
 
 
+_EMAIL_NAME_ONLY = re.compile(
+    r"^\W*(?:please\s+)?(?:e-?mail|mail)\s+(?P<n>(?!my\b|the\b|inbox\b)[A-Za-z][\w' ]{0,40}?)\s*$",
+    re.I,
+)
+
+
 def _email(clause: str, out: RulesResult) -> None:
     if _NEEDS_REPLY.search(clause):
         out.tasks.append({"kind": "gmail.needs_reply", "args": {}})
@@ -585,15 +618,42 @@ def _email(clause: str, out: RulesResult) -> None:
             name, body = _message_parts(clause)
         good = _good_name(name or "", allow_phone=False)
         if good is None:
-            out.clarifications.append("Who should I write the email to? Please say a contact name.")
+            out.ask(
+                Pending(
+                    "gmail.draft_reply",
+                    "to",
+                    {"intent": _tidy(body)[:500]} if body and _tidy(body) else {},
+                    "Who should I write the email to? Please say a contact name.",
+                )
+            )
             return
         if not body or not _tidy(body):
-            out.clarifications.append(f"What should the email to {good} say?")
+            out.ask(
+                Pending(
+                    "gmail.draft_reply",
+                    "intent",
+                    {"to": good},
+                    f"What should the email to {good} say?",
+                )
+            )
             return
         out.tasks.append(
             {"kind": "gmail.draft_reply", "args": {"to": good, "intent": _tidy(body)[:500]}}
         )
         return
+    named = _EMAIL_NAME_ONLY.match(clause)
+    if named is not None:
+        who = _good_name(named.group("n"), allow_phone=False)
+        if who is not None and who.lower() not in _SKIP_NAMES:
+            out.ask(
+                Pending(
+                    "gmail.draft_reply",
+                    "intent",
+                    {"to": who},
+                    f"What should the email to {who} say?",
+                )
+            )
+            return
     search = _SEARCH_EN.search(clause)
     query = search.group(1) if search else None
     if query is None:
@@ -608,14 +668,56 @@ def _email(clause: str, out: RulesResult) -> None:
         out.tasks.append({"kind": "gmail.important", "args": {}})
 
 
+# "Send Rahul a WhatsApp message", "WhatsApp Rahul", "Message Amma", "Send a message to Amma":
+# the person is named but nothing is said yet (or nobody is named at all).
+_NAME_ONLY_EN = [
+    re.compile(
+        r"\bsend\s+(?P<n>.+?)\s+(?:an?\s+)?(?:whats?\s?app\s+)?(?:message|msg|text)\s*$", re.I
+    ),
+    re.compile(
+        r"\bsend\s+(?:an?\s+)?(?:whats?\s?app\s+)?(?:message|msg|text)\s+to\s+(?P<n>.+?)\s*$", re.I
+    ),
+    re.compile(r"\b(?:whats?\s?app|message|text|msg|ping)\s+(?P<n>[^,;]+?)\s*$", re.I),
+]
+_NO_RECIPIENT_EN = re.compile(
+    r"^\W*(?:please\s+)?(?:send|write|draft|compose)?\s*(?:an?\s+)?(?:whats?\s?app\s+)?"
+    r"(?:message|msg|text)\s*$|^\W*(?:please\s+)?whats?\s?app\W*$",
+    re.I,
+)
+_SKIP_NAMES = {"a", "an", "the", "me", "my", "someone", "somebody", "whatsapp", "message", "text"}
+
+
+def _name_only(clause: str) -> str | None:
+    if re.search(r"[ऀ-ॿಀ-೿]", clause):
+        return None
+    for pattern in _NAME_ONLY_EN:
+        match = pattern.search(clause)
+        if match:
+            name = _tidy(match.group("n"))
+            words = [w for w in name.split() if w.lower() not in _SKIP_NAMES or w.lower() == "my"]
+            candidate = " ".join(words)
+            if candidate and candidate.lower() not in _SKIP_NAMES and len(words) <= 4:
+                return candidate
+    return None
+
+
 def _whatsapp(clause: str, out: RulesResult) -> None:
     name, body = _message_parts(clause)
+    if name is None and body is None:
+        name = _name_only(clause)
     good = _good_name(name or "", allow_phone=True)
     if good is None:
-        out.clarifications.append("Who should I message?")
+        out.ask(
+            Pending(
+                "whatsapp.send",
+                "to",
+                {"body": body[:1000]} if body else {},
+                "Who should I message?",
+            )
+        )
         return
     if not body:
-        out.clarifications.append(f"What should I say to {good}?")
+        out.ask(Pending("whatsapp.send", "body", {"to": good}, f"What should I say to {good}?"))
         return
     out.tasks.append({"kind": "whatsapp.send", "args": {"to": good, "body": body[:1000]}})
 
@@ -632,7 +734,7 @@ def _reminder(clause: str, now: datetime, out: RulesResult) -> None:
     tail = clause[match.end() :] if match is not None else (reminder_request(clause) or "")
     tail = _tidy(tail)
     if not tail:
-        out.clarifications.append("What should I remind you about?")
+        out.ask(Pending("reminder.create", "text", {}, "What should I remind you about?"))
         return
     parsed = parse_when(tail, now)
     text, when_text = tail, None

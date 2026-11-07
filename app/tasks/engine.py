@@ -40,6 +40,7 @@ from app.observability import log_event
 from app.personal.dates import IST
 from app.tasks import executors as ex
 from app.tasks import kinds as K
+from app.tasks.pending import Pending
 from app.tasks.planner import Plan, PlannedTask
 from app.tasks.store import NewTask, PlanRow, TaskRow, TaskStore
 
@@ -70,6 +71,15 @@ class VoicePending:
     task_id: str
     hash: str
     expires: float
+
+
+@dataclass
+class PendingState:
+    """A question Saathi asked this person, and how many times they have not answered it."""
+
+    pending: Pending
+    expires: float
+    tries: int = 0
 
 
 @dataclass(frozen=True)
@@ -119,6 +129,7 @@ class TaskEngine:
         self._limiter = _Limiter(PLANS_PER_HOUR, 3600)
         self._read_slots = asyncio.Semaphore(READ_CONCURRENCY)
         self.voice_pending: dict[str, VoicePending] = {}
+        self.questions: dict[str, PendingState] = {}
 
     async def _db(self, call: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """A store call off the event loop. AccountService.run takes positional arguments only."""
