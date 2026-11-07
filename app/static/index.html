@@ -35,18 +35,18 @@
 
       <section class="home-panel" aria-labelledby="start-heading">
         <div class="hero">
+          <div class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
           <p class="greeting">Namaste · ನಮಸ್ಕಾರ · नमस्ते</p>
           <h2 id="start-heading">Just say what you need.</h2>
           <p class="welcome-copy">I'll help get it done, and nothing happens until you've heard the details and said yes.</p>
-          <ul class="capabilities" aria-label="What Saathi can do">
-            <li><svg aria-hidden="true"><use href="#icon-basket"/></svg>Groceries</li>
-            <li><svg aria-hidden="true"><use href="#icon-meal"/></svg>A meal</li>
-            <li><svg aria-hidden="true"><use href="#icon-table"/></svg>A table</li>
+          <ul class="capabilities" role="group" aria-label="What would you like to try?">
+            <li><button type="button" class="cap" data-cap="grocery" aria-pressed="true"><svg aria-hidden="true"><use href="#icon-basket"/></svg>Groceries</button></li>
+            <li><button type="button" class="cap" data-cap="meal" aria-pressed="false"><svg aria-hidden="true"><use href="#icon-meal"/></svg>A meal</button></li>
+            <li><button type="button" class="cap" data-cap="table" aria-pressed="false"><svg aria-hidden="true"><use href="#icon-table"/></svg>A table</button></li>
           </ul>
-          <div class="try-saying" aria-live="polite">
-            <p class="try-title">Try saying</p>
-            <p id="try-one" class="try-line"></p>
-            <p id="try-two" class="try-line"></p>
+          <div class="try-saying">
+            <p class="try-title">Tap the phrase to try it</p>
+            <button type="button" id="try-phrase" class="try-phrase"><span id="try-text"></span><span class="try-go" aria-hidden="true">Try it &rarr;</span></button>
           </div>
           <p class="powered">Listens with <strong>Gnani Prisma</strong> · Speaks with <strong>Gnani Timbre</strong></p>
         </div>

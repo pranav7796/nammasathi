@@ -82,6 +82,7 @@ function makeApp({ savedSession = null, getPayload = payload(), postPayload = pa
   const context = {
     document: {
       querySelector(selector) { return elements[selector]; },
+      querySelectorAll() { return []; },
       createElement() { return new Element(); },
     },
     sessionStorage: {
@@ -95,7 +96,7 @@ function makeApp({ savedSession = null, getPayload = payload(), postPayload = pa
       set(key, value) { this.values[key] = value; }
     },
     navigator: { mediaDevices: { async getUserMedia() { return stream; } } },
-    window: { AudioContext: AudioContextMock, setTimeout() { return 1; }, clearTimeout() {} },
+    window: { AudioContext: AudioContextMock, setTimeout() { return 1; }, clearTimeout() {}, addEventListener() {}, scrollY: 0 },
     URL: { createObjectURL() { return "blob:reply"; }, revokeObjectURL() {} },
     Blob, Uint8Array, ArrayBuffer, DataView, Float32Array, Math, JSON, Number, encodeURIComponent,
     atob, Error, Promise, console,

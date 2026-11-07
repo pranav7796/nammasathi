@@ -95,18 +95,35 @@ function displayLanguage(code) {
   return ({ "kn-IN": "ಕನ್ನಡ · Kannada", "hi-IN": "हिन्दी · Hindi", "en-IN": "English" })[code] || code;
 }
 
-// Phrases the demo is known to handle, shown so a first-time visitor knows what to say.
+// Phrases the demo is known to handle, one per capability, in each language.
 const TRY_SAYING = {
-  "kn-IN": ["ಎರಡು ಕೆಜಿ ಅಕ್ಕಿ ಮತ್ತು ಒಂದು ಲೀಟರ್ ಹಾಲು", "ರಾತ್ರಿ ಊಟಕ್ಕೆ ಏನಾದರೂ ಬೇಕು"],
-  "hi-IN": ["दो किलो चावल और एक लीटर दूध", "कल शाम सात बजे इंदिरानगर में दो लोगों के लिए इटालियन टेबल बुक करो"],
-  "en-IN": ["Two kilos of rice and one litre of milk", "Book a table for two in Indiranagar tomorrow at 7 PM, Italian"],
+  grocery: {
+    "kn-IN": "ಎರಡು ಕೆಜಿ ಅಕ್ಕಿ ಮತ್ತು ಒಂದು ಲೀಟರ್ ಹಾಲು",
+    "hi-IN": "दो किलो चावल और एक लीटर दूध",
+    "en-IN": "Two kilos of rice and one litre of milk",
+  },
+  meal: {
+    "kn-IN": "ರಾತ್ರಿ ಊಟಕ್ಕೆ ಏನಾದರೂ ಬೇಕು",
+    "hi-IN": "मुझे रात के खाने के लिए कुछ चाहिए",
+    "en-IN": "I want something for dinner",
+  },
+  table: {
+    "kn-IN": "ನಾಳೆ ಸಂಜೆ ಏಳಕ್ಕೆ ಇಂದಿರಾನಗರದಲ್ಲಿ ಇಬ್ಬರಿಗೆ ಇಟಾಲಿಯನ್ ಟೇಬಲ್ ಬುಕ್ ಮಾಡಿ",
+    "hi-IN": "कल शाम सात बजे इंदिरानगर में दो लोगों के लिए इटालियन टेबल बुक करो",
+    "en-IN": "Book a table for two in Indiranagar tomorrow at 7 PM, Italian",
+  },
 };
+let tryCapability = "grocery";
+
+function currentPhrase() {
+  return TRY_SAYING[tryCapability]?.[languageSelect.value] || "";
+}
 
 function showTrySaying() {
-  const lines = TRY_SAYING[languageSelect.value] || [];
-  for (const [id, text] of [["#try-one", lines[0]], ["#try-two", lines[1]]]) {
-    const node = document.querySelector(id);
-    if (node) node.textContent = text ? `\u201C${text}\u201D` : "";
+  const text = document.querySelector("#try-text");
+  if (text) text.textContent = `\u201C${currentPhrase()}\u201D`;
+  for (const cap of document.querySelectorAll(".cap")) {
+    cap.setAttribute("aria-pressed", String(cap.dataset.cap === tryCapability));
   }
 }
 
@@ -427,7 +444,7 @@ async function requestJson(url, options = {}) {
   return data;
 }
 
-async function startConversation() {
+async function startConversation({ autoRecord = true } = {}) {
   let shouldRecord = false;
   showError("");
   setBusy(true);
@@ -454,7 +471,7 @@ async function startConversation() {
   } finally {
     setBusy(false);
     // A browser with no microphone can still type, so a failed automatic start stays quiet.
-    if (shouldRecord && !TYPE_ONLY) void beginRecording({ quiet: true });
+    if (shouldRecord && autoRecord && !TYPE_ONLY) void beginRecording({ quiet: true });
   }
 }
 
@@ -744,7 +761,40 @@ window.saathiSetLive = (useLive) => {
 };
 
 pageStatus.textContent = "Ready to start.";
-startButton.addEventListener("click", startConversation);
+startButton.addEventListener("click", () => startConversation());
+
+for (const cap of document.querySelectorAll(".cap")) {
+  cap.addEventListener("click", () => {
+    tryCapability = cap.dataset.cap;
+    showTrySaying();
+  });
+}
+
+// Tapping the example starts a conversation and says it. With a real Swiggy account it only fills
+// the text box, so nothing reaches a real cart until the person presses Send themselves.
+document.querySelector("#try-phrase")?.addEventListener("click", async () => {
+  if (sessionId || busy) return;
+  if (startButton.disabled) {
+    showError("Choose a delivery address first, then try the phrase.");
+    return;
+  }
+  const phrase = currentPhrase();
+  await startConversation({ autoRecord: false });
+  if (!sessionId) return;
+  if (liveMode) {
+    textInput.value = phrase;
+    textInput.focus();
+  } else {
+    await sendText(phrase);
+  }
+});
+
+// The header gains a shadow once the page scrolls under it.
+const masthead = document.querySelector(".masthead");
+const markStuck = () => masthead?.classList.toggle("is-stuck", window.scrollY > 8);
+window.addEventListener("scroll", markStuck, { passive: true });
+markStuck();
+showTrySaying();
 void loadAddresses().catch((error) => {
   showError(error.message);
   pageStatus.textContent = "Could not load delivery addresses.";
