@@ -80,10 +80,23 @@ class Settings:
     twilio_account_sid: str = ""
     twilio_auth_token: str | None = field(default=None, repr=False)
     twilio_whatsapp_from: str = ""  # the number people message, e.g. whatsapp:+14155238886
+    # Sending through Twilio's Messages API: an API key pair, or else the Account SID + Auth Token.
+    twilio_api_key_sid: str = ""
+    twilio_api_key_secret: str | None = field(default=None, repr=False)
 
     @property
     def google_configured(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret and self.public_base_url)
+
+    @property
+    def twilio_sender(self) -> str:
+        """Who Twilio sends as. Twilio's shared sandbox number unless another is configured."""
+        return self.twilio_whatsapp_from or "whatsapp:+14155238886"
+
+    @property
+    def twilio_can_send(self) -> bool:
+        key_pair = bool(self.twilio_api_key_sid and self.twilio_api_key_secret)
+        return bool(self.twilio_account_sid and (key_pair or self.twilio_auth_token))
 
     @property
     def twilio_configured(self) -> bool:
@@ -262,6 +275,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         twilio_account_sid=values.get("TWILIO_ACCOUNT_SID", "").strip(),
         twilio_auth_token=values.get("TWILIO_AUTH_TOKEN") or None,
         twilio_whatsapp_from=values.get("TWILIO_WHATSAPP_FROM", "").strip(),
+        twilio_api_key_sid=values.get("TWILIO_API_KEY_SID", "").strip(),
+        twilio_api_key_secret=values.get("TWILIO_API_KEY_SECRET") or None,
         llm_primary=llm_primary,
         llm_timeout_seconds=llm_timeout,
         demo_understanding=demo_understanding,

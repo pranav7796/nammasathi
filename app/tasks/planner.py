@@ -81,7 +81,7 @@ def _words(text: str) -> set[str]:
 
 
 def _said(content: str, user_text: str) -> bool:
-    """Most of the words of a message must be words the person used: the model may not write it."""
+    """Most words of a message must be words the person used: the model may not write it."""
     words = _words(content)
     if not words:
         return False
@@ -92,7 +92,7 @@ def _said(content: str, user_text: str) -> bool:
 def _provenance_ok(kind: str, args: dict[str, object], user_text: str) -> bool:
     """Addresses and message words in a task must be ones the person actually said or typed.
 
-    A model asked to plan "WhatsApp Amma" may write a message for her. That would be words put in the
+    A model asked to plan "WhatsApp Amma" may write a message for her. That would put words in the
     person's mouth, so such a task is dropped and the rules ask what to say instead.
     """
     field = _CONTENT.get(kind)

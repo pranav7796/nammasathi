@@ -88,7 +88,7 @@ value list, and the signature page's wording (standard HMAC-SHA256 over the raw 
 Meeting invitations: an event with attendees sends Google invitations by email, and the approval
 card says so. Events without attendees send nothing.
 
-## WhatsApp through Twilio (inbound)
+## WhatsApp through Twilio
 
 Lets a person message Namma Saathi from their own WhatsApp. Implemented and tested against signed
 test posts and Twilio's own documented signature example; **not yet tried with real Twilio.**
@@ -118,3 +118,40 @@ on its own. Replies come back in the same chat (TwiML), within Twilio's and What
 Email, calendar, reminders, WhatsApp drafts and the day plan work over WhatsApp; anything that changes
 something still needs "send it", the read-back, and "confirm". Groceries, food and tables stay on the
 website.
+
+### Sending through Twilio (outbound)
+
+When Meta's WhatsApp Cloud API is not configured but Twilio is, an approved "send a WhatsApp" task
+goes out through Twilio's Messages API (`POST /2010-04-01/Accounts/{SID}/Messages.json`), from
+`TWILIO_WHATSAPP_FROM`. Credentials, in order of preference:
+
+```
+TWILIO_API_KEY_SID=SK...       # an API key pair (Console > Account > API keys)
+TWILIO_API_KEY_SECRET=...      # shown once when the key is created
+# or, without a key pair, TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN
+```
+
+Each message carries `StatusCallback=PUBLIC_BASE_URL/api/twilio/status`; Twilio's signed delivery
+updates (sent, delivered, read, failed) show on the task board. A send is sent at most once per
+approval: a timeout or a Twilio 5xx is reported as "outcome unknown" and never retried. Sandbox
+limits: the recipient must have joined the sandbox (error 63015) and messaged within 24 hours
+(error 63016); both come back as plain explanations.
+
+### Checking the setup without sending anything
+
+```
+uv run python scripts/twilio_sandbox_check.py            # names of settings present + credential read
+uv run python scripts/twilio_sandbox_check.py --webhook  # also one signed post to your public webhook
+```
+
+### Testing from your own computer
+
+Twilio must reach an `https` address. The free, account-less option is a Cloudflare quick tunnel:
+
+```
+cloudflared tunnel --url http://localhost:8123
+```
+
+Set `PUBLIC_BASE_URL` to the printed `https://….trycloudflare.com` address, restart the server, and
+put `https://….trycloudflare.com/api/twilio/whatsapp` (POST) in the sandbox settings. The address
+changes each time the tunnel restarts; update both places when it does.

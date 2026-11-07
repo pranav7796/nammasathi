@@ -21,6 +21,7 @@ from app.config import Settings
 from app.llm.scripted import ScriptedExtractor
 from app.twilio_whatsapp import expected_signature, normalise_sender, webhook_url
 from app.web import create_app
+from tests.fake_twilio import FakeTwilio
 from tests.test_accounts import BASE, KEY, PASSWORD, RecordingMailer, SilentTTS, Site
 
 TOKEN = "tw-auth-token-for-tests"
@@ -51,7 +52,9 @@ def test_numbers_and_the_webhook_address() -> None:
 
 
 @asynccontextmanager
-async def twilio_site(tmp_path: Path, *, configured: bool = True) -> AsyncGenerator[Site]:
+async def twilio_site(
+    tmp_path: Path, *, configured: bool = True, twilio: FakeTwilio | None = None
+) -> AsyncGenerator[Site]:
     settings = Settings(
         demo_understanding="scripted",
         public_base_url=BASE,
@@ -72,6 +75,7 @@ async def twilio_site(tmp_path: Path, *, configured: bool = True) -> AsyncGenera
         tts_factory=lambda _s, _l: SilentTTS(),  # type: ignore[arg-type,return-value]
         mailer=RecordingMailer(can_send=True),
     )
+    app.state.integration_transport = (twilio or FakeTwilio()).transport  # never the real Twilio
     async with app.router.lifespan_context(app):
         yield Site(app, RecordingMailer(can_send=True))
 
@@ -421,4 +425,4 @@ async def test_without_twilio_details_the_card_says_what_is_missing(tmp_path: Pa
         await sign_up(client, "asha@example.com")
         cards = {a["id"]: a for a in (await client.get("/api/integrations")).json()["apps"]}
         assert cards["twilio"]["state"] == "configuration_required"
-        assert cards["twilio"]["setup"] == ["TWILIO_AUTH_TOKEN"]
+        assert cards["twilio"]["setup"] == ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"]

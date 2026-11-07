@@ -25,6 +25,7 @@ Groceries, food and tables stay on the website: they need the basket and readbac
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -32,7 +33,7 @@ import re
 import secrets
 import time
 from collections import OrderedDict
-from typing import cast
+from typing import Any, cast
 from urllib.parse import parse_qsl
 from xml.sax.saxutils import escape
 
@@ -43,10 +44,13 @@ from app.accounts.service import UNAVAILABLE_MESSAGE, AccountService, AccountsUn
 from app.observability import log_event
 from app.personal import voice as reminder_voice
 from app.personal.service import PersonalService
+from app.tasks import kinds as K
 from app.tasks import turn as task_turn
-from app.tasks.engine import TaskEngine
+from app.tasks.engine import Snapshot, TaskEngine
 from app.tasks.kinds import is_phone
 from app.tasks.planner import PlanExtractor
+from app.twilio_messaging import STATUS as TWILIO_STATUS
+from app.whatsapp import store
 
 PATH = "/api/twilio/whatsapp"
 MAX_BODY_BYTES = 64 * 1024
@@ -126,6 +130,68 @@ def phone_for_user(db: Database, user_id: str) -> str | None:
 def unlink_user(db: Database, user_id: str) -> None:
     with db.transaction() as tx:
         tx.execute("DELETE FROM whatsapp_links WHERE user_id = ?", (user_id,))
+
+
+# Results ----------------------------------------------------------------------------------------
+
+RESULT_WAIT_SECONDS = 8.0  # Twilio waits about 15 s for the webhook; reads usually finish sooner
+
+
+async def _results(engine: TaskEngine, user_id: str, plan_id: str) -> str:
+    """What the plan found, in a few lines, once its reads finish (or as far as they got)."""
+    deadline = time.monotonic() + RESULT_WAIT_SECONDS
+    snapshot = await engine.snapshot(user_id, plan_id)
+    while snapshot is not None and snapshot.active and time.monotonic() < deadline:
+        await asyncio.sleep(0.25)
+        snapshot = await engine.snapshot(user_id, plan_id)
+    if snapshot is None:
+        return ""
+    return summarise(snapshot)
+
+
+def summarise(snapshot: Snapshot) -> str:
+    """Plain text for a chat. Demo results say so. Nothing is called done that isn't."""
+    lines: list[str] = []
+    for task in snapshot.tasks:
+        view = cast(dict[str, Any], task.result.get("view") or {})
+        demo = " (demo data)" if view.get("demo") else ""
+        if task.status in ("pending", "running"):
+            lines.append(f"\u2026 {K.spec_for(task.kind).label}: still working.")
+        elif task.status == "failed":
+            lines.append(f"\u2717 {K.spec_for(task.kind).label}: {task.error or "didn't finish"}")
+        elif task.status == "waiting_for_input":
+            lines.append(f"? {task.result.get('needs') or 'I need one more detail.'}")
+        elif task.status == "waiting_for_approval":
+            lines.append(
+                f'\u23f8 {K.spec_for(task.kind).label} is ready. Reply "send it" to hear it, '
+                'then "confirm".'
+            )
+        elif "emails" in view:
+            mails = cast(list[dict[str, Any]], view["emails"])
+            if not mails:
+                lines.append(f"Email{demo}: nothing important.")
+            else:
+                lines.append(f"Email{demo}:")
+                lines += [f"\u2022 {m['sender']}: {m['subject']}" for m in mails[:4]]
+        elif "days" in view:
+            days = cast(list[dict[str, Any]], view["days"])
+            events = [(d["date"], e) for d in days for e in d["events"]]
+            if not events:
+                lines.append(f"Calendar{demo}: nothing scheduled.")
+            else:
+                lines.append(f"Calendar{demo}:")
+                lines += [f"\u2022 {day} {e['start']} {e['title']}" for day, e in events[:5]]
+        elif "window" in view:
+            if view.get("free"):
+                lines.append(f"That time is free{demo}.")
+            else:
+                clashes = ", ".join(c["title"] for c in view.get("conflicts", [])[:3])
+                lines.append(f"That time clashes with {clashes}{demo}.")
+        elif "items" in view:
+            items = cast(list[dict[str, Any]], view["items"])
+            lines.append(f"Your day{demo}:")
+            lines += [f"\u2022 {i.get('time') or '--:--'} {i['title']}" for i in items[:6]]
+    return "\n".join(lines)
 
 
 # Replies ----------------------------------------------------------------------------------------
@@ -266,14 +332,43 @@ def twilio_router() -> APIRouter:
                 engine, user_id, language, text, extractor, order_busy=False
             )
             if reply is not None:
-                extra = "\nThe details are on the website." if reply.widgets else ""
-                return reply.message + extra
+                if reply.plan_id is None:
+                    return reply.message
+                summary = await _results(engine, user_id, reply.plan_id)
+                return f"{reply.message}\n\n{summary}" if summary else reply.message
         wording = reminder_voice.reminder_request(text)
         if wording is not None:
             personal = PersonalService(service)
             saved = await personal.create_reminder_from_text(user_id, wording)
             return reminder_voice.reply_text(language, saved)
         return _HELP
+
+    @router.post("/status")
+    async def delivery(request: Request) -> Response:
+        """Twilio's status callback for a message Saathi sent. Signed like the inbound webhook."""
+        service = service_of(request)
+        settings = service.settings
+        if not settings.twilio_configured or settings.twilio_auth_token is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        params = await read_form(request)
+        url = f"{settings.public_base_url.rstrip('/')}/api/twilio/status"
+        if request.url.query:
+            url = f"{url}?{request.url.query}"
+        if not valid_signature(
+            settings.twilio_auth_token, url, params, request.headers.get("X-Twilio-Signature", "")
+        ):
+            log_event("twilio", op="status", outcome="bad_signature")
+            raise HTTPException(status_code=403, detail="Forbidden.")
+        message_id = params.get("MessageSid", "")
+        status = TWILIO_STATUS.get(params.get("MessageStatus", ""), "")
+        if message_id and status and status != "accepted":
+            detail = f"Twilio error {params['ErrorCode']}" if params.get("ErrorCode") else ""
+            try:
+                await service.run(store.apply_status, service.database, message_id, status, detail)
+            except AccountsUnavailable:
+                raise HTTPException(status_code=503, detail="Try again.") from None
+        log_event("twilio", op="status", outcome=status or "ignored")
+        return Response(status_code=204)
 
     # The person's side: get a code, see the status, unlink. These need a signed-in session.
 

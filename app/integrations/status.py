@@ -24,6 +24,7 @@ from app.google.calendar import GoogleCalendarClient
 from app.google.gmail import GmailClient
 from app.google.oauth import GoogleOAuth
 from app.integrations.base import IntegrationError, NotConnected, ReauthRequired
+from app.twilio_messaging import TwilioMessaging
 from app.twilio_whatsapp import mask, phone_for_user
 from app.whatsapp.client import WhatsAppClient
 
@@ -229,7 +230,9 @@ async def _whatsapp_card(settings: Settings, whatsapp: WhatsAppClient | None) ->
     return card
 
 
-async def _twilio_card(user: User, accounts: AccountService) -> dict[str, Any]:
+async def _twilio_card(
+    user: User, accounts: AccountService, transport: httpx.AsyncBaseTransport | None
+) -> dict[str, Any]:
     """WhatsApp through Twilio: a number is linked only after it sent this person's code itself."""
     settings = accounts.settings
     card: dict[str, Any] = {
@@ -254,6 +257,7 @@ async def _twilio_card(user: User, accounts: AccountService) -> dict[str, Any]:
     missing = [
         name
         for name, value in (
+            ("TWILIO_ACCOUNT_SID", settings.twilio_account_sid),
             ("TWILIO_AUTH_TOKEN", settings.twilio_auth_token),
             ("PUBLIC_BASE_URL", settings.public_base_url),
         )
@@ -265,6 +269,18 @@ async def _twilio_card(user: User, accounts: AccountService) -> dict[str, Any]:
             detail="The site's owner needs to add Twilio details before numbers can be linked.",
             setup=missing,
         )
+        return card
+    try:
+        # A real check with Twilio: it reads the account and sends nothing.
+        await TwilioMessaging(settings, accounts, transport=transport).check()
+    except ReauthRequired:
+        card.update(
+            state="authorization_failed",
+            detail="Twilio refused this site's credentials. The owner must check them.",
+        )
+        return card
+    except (IntegrationError, NotConnected):
+        card.update(state="unavailable", detail="Couldn't reach Twilio just now.")
         return card
     phone = await accounts.run(phone_for_user, accounts.database, user.id)
     if phone is None:
@@ -346,6 +362,6 @@ async def collect(
             transport,
         ),
         await _whatsapp_card(accounts.settings, whatsapp),
-        await _twilio_card(user, accounts),
+        await _twilio_card(user, accounts, transport),
         await _swiggy_card(user, accounts),
     ]

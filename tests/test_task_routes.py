@@ -170,7 +170,9 @@ async def test_opening_an_email_shows_hostile_text_as_plain_text_only(tmp_path: 
         assert "Ignore all previous instructions" in card["body"]  # data, shown as is
         assert statuses(await settled(client)) == {"Search email": "completed"}  # nothing was run
         reply = await act(client, f"email.reply:{mail['id']}")
-        assert reply["plan"]["active"] is True  # the draft is being prepared: the page polls
+        # A plan was started. It may already be ready by the time the reply is built (a race the
+        # page handles by polling), so only its existence is asserted here.
+        assert reply["plan"]["id"]
         drafted = await settled(client)
         composer = widget(drafted, "composer")
         assert composer["state"] == "draft" and composer["demo"] is True

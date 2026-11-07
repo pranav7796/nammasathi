@@ -16,10 +16,12 @@ from app.accounts.service import AccountService
 from app.google.calendar import GoogleCalendarClient
 from app.google.gmail import GmailClient
 from app.google.oauth import GoogleOAuth
+from app.integrations.base import MessagingClient
 from app.memory.service import MemoryService
 from app.personal.service import PersonalService
 from app.tasks.demo import DemoWorld
 from app.tasks.executors import ContactResolver, DemoContacts, ResolvedContact, Services
+from app.twilio_messaging import TwilioMessaging
 from app.whatsapp.client import WhatsAppClient
 
 
@@ -58,11 +60,15 @@ class ServiceHub:
         self._demo = DemoWorld()
         self._personal = PersonalService(accounts)
         self._contacts: ContactResolver = MemoryContacts(MemoryService(accounts))
-        self._whatsapp = (
-            WhatsAppClient(accounts.settings, accounts, transport=transport)
-            if accounts.settings.whatsapp_configured
-            else None
-        )
+        settings = accounts.settings
+        # Meta's API when configured, else Twilio's, else the labelled practice version.
+        self._whatsapp: MessagingClient | None
+        if settings.whatsapp_configured:
+            self._whatsapp = WhatsAppClient(settings, accounts, transport=transport)
+        elif settings.twilio_can_send:
+            self._whatsapp = TwilioMessaging(settings, accounts, transport=transport)
+        else:
+            self._whatsapp = None
 
     async def for_user(self, user_id: str) -> Services:
         settings = self._accounts.settings

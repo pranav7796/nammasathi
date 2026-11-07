@@ -112,7 +112,8 @@ _REMINDER = re.compile(
 # A verb that starts a new action: used to decide whether "and" separates two requests.
 _ACTION_VERB = (
     r"(?:check|schedule|remind|send|message|text|whatsapp|e-?mail|mail|plan|draft|reply|show|"
-    r"cancel|reschedule|set\s+up|set|book|arrange|create|add|find|search|read|see|tell|look)\b"
+    r"cancel|reschedule|set\s+up|set|book|arrange|create|add|find|search|read|see|tell|look|"
+    r"what(?:'s|\s+is|\s+do)?|do\s+i|am\s+i|is\s+there|are\s+there)\b"
 )
 
 
