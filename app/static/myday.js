@@ -239,6 +239,7 @@
     dialog.close();
     void window.saathiSay?.("Saathi, what should I focus on today?");
   });
+  document.querySelector("#myday-manage")?.addEventListener("click", () => dialog.close());
   window.saathiOpenMyDay = open;
   window.addEventListener("saathi:me", (event) => {
     opener.hidden = !(event.detail && event.detail.user);

@@ -125,17 +125,33 @@ async def main() -> None:
         check("a demo event says it was not really created", True)
         await page.screenshot(path=f"{OUT}/tasks-approved.png", full_page=True)
 
-        # My day: reminders, contacts, connections.
+        # Connected apps: honest states, never "connected" without the service confirming.
+        await page.click("#apps-button")
+        await page.wait_for_selector("#apps-dialog[open] .status-chip:not([data-state=loading])")
+        apps = (await page.inner_text("#apps-grid")).lower()
+        check(
+            "apps say configuration is required when not set up", "configuration required" in apps
+        )
+        check("and name the settings that are missing", "google_client_id" in apps)
+        check("nothing is shown as connected", "connected" not in apps.replace("not connected", ""))
+        await page.screenshot(path=f"{OUT}/tasks-apps.png")
+        await page.click("#apps-close")
+
+        # My day, then reminders, notes and contacts.
         await page.click("#personal-button")
-        await page.wait_for_selector("#personal-dialog[open] #connections .conn-row")
-        conn = await page.inner_text("#connections")
-        check("connections say they are demo when not set up", "demo" in conn.lower(), conn[:90])
+        await page.wait_for_selector("#myday-dialog[open] .day-card")
+        check(
+            "My day explains an unconnected calendar",
+            "Connect Google Calendar" in await page.inner_text("#myday-grid"),
+        )
+        await page.screenshot(path=f"{OUT}/tasks-myday.png")
+        await page.click("#myday-manage")
+        await page.wait_for_selector("#personal-dialog[open] #contact-form")
         await page.fill('#contact-form input[name="name"]', "Amma")
         await page.fill('#contact-form input[name="phone"]', "+919876543210")
         await page.click("#contact-form button[type=submit]")
         await page.wait_for_selector("#contacts-list >> text=Amma")
         check("a contact can be saved", True)
-        await page.screenshot(path=f"{OUT}/tasks-myday.png")
         await page.click("#personal-close")
 
         # Guided demo, from a fresh start (a reload would otherwise resume the conversation).

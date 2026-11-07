@@ -160,7 +160,10 @@ async def main() -> None:
             await page.wait_for_selector("#personal-button:not([hidden])")
 
             # Kannada: the WhatsApp question and its answers stay in the WhatsApp workflow.
-            await page.click('[data-lang="kn-IN"]')
+            fresh = page.locator("#new-session-button")
+            if await fresh.count() and await fresh.is_visible():
+                await fresh.click()  # a signed-in person returns to their open conversation
+            await page.click('.language-choice[data-lang="kn-IN"]')
             await page.click("#start-button")
             await page.wait_for_selector("#text-input")
             await say(page, "ಅಮ್ಮನಿಗೆ ವಾಟ್ಸಾಪ್ ಮಾಡಿ")

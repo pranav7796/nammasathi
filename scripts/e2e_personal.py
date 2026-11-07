@@ -56,7 +56,9 @@ async def main() -> None:
         await page.wait_for_selector("#personal-button:not([hidden])")
         check("Reminders button appears when signed in", True)
 
-        await page.click("#personal-button")
+        await page.click("#personal-button")  # My day opens first
+        await page.wait_for_selector("#myday-dialog[open] .day-card")
+        await page.click("#myday-manage")  # then reminders, notes and contacts
         await page.wait_for_selector("#personal-dialog[open] .genui-w-form")
         await page.fill("#personal-widgets input[type=text] >> nth=0", "Call Amma")
         await page.fill("#personal-widgets input[type=date]", "2030-01-02")
@@ -77,7 +79,7 @@ async def main() -> None:
         check("a note appears in the list", True)
         await page.click("#personal-close")
 
-        await page.click('[data-lang="en-IN"]')
+        await page.click('.language-choice[data-lang="en-IN"]')
         await page.click("#start-button")
         await page.wait_for_selector("#text-input")
         await page.fill("#text-input", "Remind me to pay rent tomorrow at 9 am")
