@@ -442,3 +442,20 @@ async def test_database_failing_after_sign_in_is_503(
         response = await browser.get("/api/personal/reminders")
         assert response.status_code == 503
         assert "went away" not in response.text
+
+
+async def test_a_reminder_written_in_plain_words_has_its_time_taken_out_of_the_text(
+    tmp_path: Path,
+) -> None:
+    """The My Day box sends "call Amma tomorrow at 7 pm" as both the text and the when."""
+    from tests.test_accounts import register, site
+
+    async with site(tmp_path) as s, s.browser() as client:
+        await register(client)
+        words = "call Amma tomorrow at 7 pm"
+        made = await client.post(
+            "/api/personal/reminders", json={"text": words, "when_text": words}
+        )
+        assert made.status_code == 200, made.text
+        item = made.json()
+        assert item["text"] == "call Amma" and item["due"] and "T19:00" in item["due"]

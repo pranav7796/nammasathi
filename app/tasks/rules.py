@@ -99,6 +99,8 @@ _CALENDAR = re.compile(
 )
 _DAY = re.compile(
     r"plan\s+(?:out\s+)?(?:my|the)\s+(?:whole\s+)?day|(?<!\w)my\s+day(?!\w)|(?<!\w)agenda(?!\w)"
+    r"|what\s+should\s+i\s+(?:focus\s+on|do|work\s+on)\s+today|focus\s+on\s+today"
+    r"|(?<!\w)my\s+priorities(?!\w)"
     r"|मेरा\s+दिन|दिन\s+की\s+योजना|आज\s+का\s+प्लान|mera\s+din|ನನ್ನ\s+ದಿನ|ದಿನದ\s+ಯೋಜನೆ",
     re.IGNORECASE,
 )

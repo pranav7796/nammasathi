@@ -133,9 +133,13 @@ def personal_router(accounts: AccountService | None = None) -> APIRouter:
         user, service = await me(request)
         data = await body(request, ReminderIn)
         try:
-            item = await service.create_reminder(
-                user.id, data.text, _due(data.due), when_text=data.when_text
-            )
+            if data.due is None and data.when_text and data.when_text.strip() == data.text.strip():
+                # "call Amma tomorrow at 7 pm": the time is taken out of the words, as by voice.
+                item = await service.create_reminder_from_text(user.id, data.text)
+            else:
+                item = await service.create_reminder(
+                    user.id, data.text, _due(data.due), when_text=data.when_text
+                )
         except PersonalError as exc:
             raise _fail(exc) from exc
         return reminder_json(item)

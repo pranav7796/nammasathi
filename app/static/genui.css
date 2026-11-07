@@ -30,9 +30,9 @@
   max-width: 100%;
   padding: 16px;
   border: 1px solid var(--g-line);
-  border-radius: 18px;
+  border-radius: var(--radius-l, 18px);
   background: var(--g-panel);
-  box-shadow: var(--g-shadow);
+  box-shadow: var(--shadow-s, var(--g-shadow));
   overflow-wrap: anywhere;
 }
 .genui-w-heading, .genui-w-text { padding: 2px 4px; border: 0; background: none; box-shadow: none; }

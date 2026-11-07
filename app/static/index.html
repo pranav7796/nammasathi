@@ -8,15 +8,18 @@
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Baloo+Tamma+2:wght@600;700&family=Noto+Sans:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;500;700&family=Noto+Sans+Kannada:wght@400;500;700&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Baloo+Tamma+2:wght@600;700&family=Inter:wght@400;500;600;700&family=Noto+Sans:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;500;700&family=Noto+Sans+Kannada:wght@400;500;700&display=swap">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/waitlist.css">
     <link rel="stylesheet" href="/static/genui.css">
+    <script src="/static/ui.js" defer></script>
     <script src="/static/genui.js" defer></script>
     <script src="/static/app.js" defer></script>
     <script src="/static/account.js" defer></script>
     <script src="/static/waitlist.js" defer></script>
     <script src="/static/personal.js" defer></script>
+    <script src="/static/apps.js" defer></script>
+    <script src="/static/myday.js" defer></script>
     <script src="/static/guide.js" defer></script>
   </head>
   <body>
@@ -29,17 +32,34 @@
       <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
       <symbol id="icon-chat" viewBox="0 0 24 24"><path d="M4 5.5h16v10H10l-4.5 4v-4H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
       <symbol id="icon-sparkle" viewBox="0 0 24 24"><path d="M12 3l2 5.5L19.5 10 14 12l-2 5.5L10 12 4.500 10 10 8.500zM18.500 16l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" fill="none" stroke="currentColor" stroke-width="1.800" stroke-linejoin="round"/></symbol>
+      <symbol id="icon-apps" viewBox="0 0 24 24"><rect x="3.500" y="3.500" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13.500" y="3.500" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3.500" y="13.500" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13.500" y="13.500" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+      <symbol id="icon-bag" viewBox="0 0 24 24"><path d="M5 8h14l-1 12H6zM9 8V6a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="icon-reminder" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.500 2h-15zM10 21h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="icon-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="2.200" stroke-linecap="round"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="M5 12.500l4.500 4.500L19 7.500" fill="none" stroke="currentColor" stroke-width="2.400" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="icon-table" viewBox="0 0 24 24"><path d="M3 9h18M12 9v11M8 20h8M6 9V5M18 9V5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     </svg>
+    <header class="topbar" id="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="/" aria-label="Namma Saathi, home">
+          <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+            <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14877a"/><stop offset="1" stop-color="#08423d"/></linearGradient></defs>
+            <rect width="40" height="40" rx="12" fill="url(#lg)"/>
+            <path d="M9.500 13.500A4.500 4.500 0 0 1 14 9h12a4.500 4.500 0 0 1 4.500 4.500v7A4.500 4.500 0 0 1 26 25h-7l-5 4.300V25a4.500 4.500 0 0 1-4.500-4.500z" fill="#fff"/>
+            <rect x="13.500" y="15" width="2.600" height="5" rx="1.300" fill="#f0a52b"/><rect x="18.200" y="12.500" width="2.600" height="10" rx="1.300" fill="#f0a52b"/><rect x="22.900" y="14.500" width="2.600" height="6" rx="1.300" fill="#f0a52b"/>
+          </svg>
+          <span class="brand-copy"><span class="wordmark">Namma Saathi</span><span class="tagline">Your personal AI for everyday life</span></span>
+        </a>
+        <p id="workflow-title" class="workflow-title" role="status" hidden></p>
+        <div class="topbar-actions">
+          <p id="commerce-badge" class="demo-badge">Demo order</p>
+          <button id="apps-button" class="account-button" type="button" hidden aria-label="Connected apps"><svg class="i" aria-hidden="true"><use href="#icon-apps"/></svg><span class="label">Apps</span><span id="apps-count" class="count"></span></button>
+          <button id="personal-button" class="account-button" type="button" hidden><svg class="i" aria-hidden="true"><use href="#icon-sun"/></svg><span class="label">My day</span></button>
+          <button id="account-button" class="account-button" type="button" hidden>Sign in</button>
+        </div>
+      </div>
+    </header>
     <main class="page">
-      <header class="masthead">
-        <div class="brand-mark" aria-hidden="true">ಸ</div>
-        <div class="brand-copy"><h1>Namma Saathi</h1><p>Your personal AI for everyday life</p></div>
-        <p id="commerce-badge" class="demo-badge">Demo order</p>
-        <button id="personal-button" class="account-button" type="button" hidden>My day</button>
-        <button id="account-button" class="account-button" type="button" hidden>Sign in</button>
-      </header>
-
       <p id="error-message" class="error-message" role="alert" hidden></p>
       <p id="accounts-notice" class="scripted-note" role="status" hidden></p>
       <p id="connection-notice" class="scripted-note" role="status" hidden>Your Swiggy account is not connected. <button id="connection-notice-open" class="text-button" type="button">Connect it</button></p>
@@ -47,7 +67,20 @@
 
       <section class="home-panel" aria-labelledby="start-heading">
         <div class="hero">
-          <div class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="hero-art" aria-hidden="false">
+            <svg viewBox="0 0 360 230" role="img" aria-label="Namma Saathi listens, then gets things done">
+              <defs>
+                <radialGradient id="orb" cx="50%" cy="38%" r="68%"><stop offset="0" stop-color="#1d9a89"/><stop offset="1" stop-color="#08423d"/></radialGradient>
+                <filter id="soft" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#15181c" flood-opacity=".14"/></filter>
+              </defs>
+              <circle cx="180" cy="115" r="106" fill="none" stroke="#0d6a60" stroke-opacity=".14" stroke-dasharray="3 8"/>
+              <circle cx="180" cy="115" r="82" fill="none" stroke="#0d6a60" stroke-opacity=".2"/>
+              <circle cx="180" cy="115" r="58" fill="url(#orb)" filter="url(#soft)"/>
+              <g fill="#fff"><rect class="bar" x="148" y="105" width="6" height="20" rx="3"/><rect class="bar" x="159" y="98" width="6" height="34" rx="3"/><rect class="bar" x="170" y="92" width="6" height="46" rx="3"/><rect class="bar" x="181" y="88" width="6" height="54" rx="3"/><rect class="bar" x="192" y="92" width="6" height="46" rx="3"/><rect class="bar" x="203" y="98" width="6" height="34" rx="3"/><rect class="bar" x="214" y="105" width="6" height="20" rx="3"/></g>
+              <g class="orbit"><rect x="30" y="30" width="46" height="46" rx="14" fill="#fff" filter="url(#soft)"/><g transform="translate(41 41)" fill="none" stroke="#0d6a60" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="22" height="16" rx="3"/><path d="M2 5l10 8 10-8"/></g></g><g class="orbit"><rect x="284" y="26" width="46" height="46" rx="14" fill="#fff" filter="url(#soft)"/><g transform="translate(295 37)" fill="none" stroke="#0d6a60" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="18" rx="3"/><path d="M2 10h20M8 2v4M16 2v4"/></g></g><g class="orbit"><rect x="24" y="150" width="46" height="46" rx="14" fill="#fff" filter="url(#soft)"/><g transform="translate(35 161)" fill="none" stroke="#0d6a60" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-2 11H5zM8 9l3-6M16 9l-3-6"/></g></g><g class="orbit"><rect x="290" y="152" width="46" height="46" rx="14" fill="#fff" filter="url(#soft)"/><g transform="translate(301 163)" fill="none" stroke="#0d6a60" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v13H10l-5 4v-4H3z"/></g></g>
+              <circle cx="180" cy="26" r="5" fill="#f0a52b"/><circle cx="106" cy="206" r="3.500" fill="#f0a52b" fill-opacity=".7"/><circle cx="262" cy="200" r="4" fill="#0d6a60" fill-opacity=".35"/>
+            </svg>
+          </div>
           <p class="greeting">Namaste · ನಮಸ್ಕಾರ · नमस्ते</p>
           <h2 id="start-heading">Just say what you need.</h2>
           <p class="welcome-copy">I'll help get it done, and nothing happens until you've heard the details and said yes.</p>
@@ -103,7 +136,7 @@
         <div id="waitlist-mount"></div>
       </section>
 
-      <section id="conversation" class="conversation" aria-label="Your conversation with Saathi" hidden>
+      <section id="conversation" class="conversation" data-ctx="welcome" aria-label="Your conversation with Saathi" hidden>
         <section id="tasks-panel" class="tasks-panel" aria-label="What Saathi is holding for you" hidden>
           <p class="tasks-title">Your tasks <span id="tasks-mode" class="tasks-mode"></span></p>
           <ul id="tasks-list" class="tasks-list"></ul>
@@ -111,6 +144,7 @@
 
         <div class="conversation-grid">
           <div class="conversation-main">
+            <div id="chat-log" class="chat-log" aria-label="Earlier in this conversation"></div>
             <section class="panel talk-panel" aria-labelledby="conversation-heading">
               <div class="saathi-row">
                 <div class="avatar" aria-hidden="true">ಸ</div>
@@ -135,9 +169,6 @@
               <p class="confirmation-intro">Tap one, or say first, second, or third.</p>
               <div id="options-list" class="option-grid"></div>
             </section>
-
-            <p id="genui-message" class="scripted-note" role="status" hidden></p>
-            <div id="genui-inline" class="genui-inline" aria-live="polite"></div>
 
             <section id="order-panel" class="panel order-panel" aria-labelledby="order-heading" role="status" hidden>
               <h2 id="order-heading">Your order</h2>
@@ -166,22 +197,48 @@
             <button id="new-session-button" class="text-button" type="button">Start a new conversation</button>
           </div>
 
-          <aside class="conversation-side">
-            <section class="panel cart-panel" aria-labelledby="cart-heading">
+          <aside class="context-panel" aria-label="What Saathi is working on">
+            <section class="ctx ctx-welcome panel" aria-labelledby="ctx-welcome-title">
+              <svg class="ctx-art" viewBox="0 0 220 130" role="img" aria-label="Nothing in progress yet">
+                <defs><filter id="soft2" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#15181c" flood-opacity=".12"/></filter></defs>
+                <rect x="30" y="22" width="130" height="62" rx="18" fill="#fff" stroke="#e4e0d6" filter="url(#soft2)"/>
+                <path d="M62 84v18l20-18" fill="#fff" stroke="#e4e0d6" stroke-linejoin="round"/>
+                <g fill="#0d6a60"><rect x="52" y="44" width="6" height="18" rx="3" opacity=".5"/><rect x="64" y="36" width="6" height="34" rx="3"/><rect x="76" y="42" width="6" height="22" rx="3" opacity=".7"/><rect x="88" y="34" width="6" height="38" rx="3"/><rect x="100" y="44" width="6" height="18" rx="3" opacity=".5"/><rect x="112" y="40" width="6" height="26" rx="3" opacity=".8"/></g>
+                <circle cx="176" cy="40" r="14" fill="#fcefd3"/><circle cx="176" cy="40" r="5" fill="#f0a52b"/>
+                <circle cx="188" cy="98" r="7" fill="#e3f1ee"/><circle cx="168" cy="108" r="3" fill="#c6e3de"/>
+              </svg>
+              <div class="ctx-head"><h2 id="ctx-welcome-title">What can I do for you?</h2></div>
+              <p class="small-note">Tap one to try it, or just speak.</p>
+              <ul class="prompt-list"><li><button type="button" class="prompt-chip" data-cap="grocery"><svg aria-hidden="true"><use href="#icon-basket"/></svg><span>Order groceries</span></button></li><li><button type="button" class="prompt-chip" data-cap="meal"><svg aria-hidden="true"><use href="#icon-meal"/></svg><span>Find dinner</span></button></li><li><button type="button" class="prompt-chip" data-cap="table"><svg aria-hidden="true"><use href="#icon-table"/></svg><span>Book a table</span></button></li><li><button type="button" class="prompt-chip" data-cap="day"><svg aria-hidden="true"><use href="#icon-sun"/></svg><span>Plan my day</span></button></li><li><button type="button" class="prompt-chip" data-cap="email"><svg aria-hidden="true"><use href="#icon-mail"/></svg><span>Check my important emails</span></button></li><li><button type="button" class="prompt-chip" data-cap="meeting"><svg aria-hidden="true"><use href="#icon-calendar"/></svg><span>Schedule a meeting</span></button></li><li><button type="button" class="prompt-chip" data-cap="whatsapp"><svg aria-hidden="true"><use href="#icon-chat"/></svg><span>Send a WhatsApp message</span></button></li></ul>
+            </section>
+            <div class="ctx ctx-order">
+              <section class="panel cart-panel" aria-labelledby="cart-heading">
               <div class="cart-heading-row"><h2 id="cart-heading">Your task</h2><span id="state-label" class="state-label">Ready</span></div>
               <ul id="cart-items" class="cart-items"><li class="empty-cart">Nothing here yet. Tell Saathi what you need.</li></ul>
               <p class="cart-total"><span>Total</span><strong id="cart-total">₹0</strong></p>
               <p id="catalogue-note" class="small-note">Prices and pack sizes are from the demo catalogue.</p>
               <p class="edit-help small-note">To change anything, just tell Saathi.</p>
             </section>
+            </div>
+            <div class="ctx ctx-tasks">
+              <p id="ctx-hint" class="ctx-hint" role="status" hidden></p>
+              <p id="genui-message" class="scripted-note" role="status" hidden></p>
+              <div id="genui-inline" class="genui-inline" aria-live="polite"></div>
+            </div>
           </aside>
         </div>
 
-        <section class="composer" aria-labelledby="voice-heading">
+        <section class="composer" id="composer" aria-labelledby="voice-heading">
           <div class="composer-inner">
             <div class="composer-status">
               <h2 id="voice-heading" class="sr-only">What would you like?</h2>
               <p id="recording-status" class="recording-status" role="status" aria-live="polite">Tap the microphone and tell Saathi.</p>
+              <span class="listen-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+              <div class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-pill" data-lang="kn-IN" aria-pressed="false" lang="kn">ಕನ್ನಡ</button>
+                <button type="button" class="lang-pill" data-lang="hi-IN" aria-pressed="false" lang="hi">हिन्दी</button>
+                <button type="button" class="lang-pill" data-lang="en-IN" aria-pressed="false">English</button>
+              </div>
               <p class="language-tag" id="language-status">ಕನ್ನಡ · Kannada selected</p>
             </div>
             <div class="composer-controls">
@@ -200,6 +257,39 @@
       <p id="page-status" class="page-status" role="status" aria-live="polite"></p>
       <p id="timings" class="small-note timings" hidden></p>
     </main>
+
+    <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+    <dialog id="apps-dialog" class="account-dialog wide" aria-labelledby="apps-title">
+      <div class="account-head">
+        <h2 id="apps-title">Connected apps</h2>
+        <span><button id="apps-refresh" class="text-button" type="button">Check again</button> <button id="apps-close" class="text-button" type="button">Close</button></span>
+      </div>
+      <p class="small-note">Saathi only uses what you connect, and asks you before it sends or changes anything. "Connected" is shown only after the service itself confirms it.</p>
+      <div id="apps-grid" class="apps-grid" aria-live="polite"></div>
+    </dialog>
+
+    <dialog id="myday-dialog" class="account-dialog wide" aria-labelledby="myday-title">
+      <div class="account-head">
+        <h2 id="myday-title">Your day</h2>
+        <span><button id="myday-refresh" class="text-button" type="button">Refresh</button> <button id="myday-close" class="text-button" type="button">Close</button></span>
+      </div>
+      <div class="myday-hero">
+        <p id="myday-date">Today</p>
+        <button id="myday-focus" class="start-button" type="button">Saathi, what should I focus on today?</button>
+        <button id="myday-manage" class="secondary-button" type="button">Reminders, notes, contacts</button>
+      </div>
+      <div id="myday-grid" class="myday-grid" aria-live="polite"></div>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="account-dialog narrow" aria-labelledby="confirm-title">
+      <h2 id="confirm-title" class="dialog-title">Are you sure?</h2>
+      <p id="confirm-body" class="dialog-body"></p>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" class="secondary-button" type="button">Cancel</button>
+        <button id="confirm-ok" class="danger-button" type="button">Confirm</button>
+      </div>
+    </dialog>
 
     <aside id="guide" class="guide" aria-live="polite" hidden>
       <p id="guide-step" class="guide-step"></p>
@@ -231,10 +321,7 @@
           <button type="submit" class="start-button contact-add">Save contact</button>
         </form>
       </section>
-      <section class="panel-section" aria-labelledby="connections-title">
-        <h3 id="connections-title">Connected apps</h3>
-        <div id="connections"></div>
-      </section>
+
     </dialog>
 
     <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-title">

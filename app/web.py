@@ -70,6 +70,7 @@ from app.integrations.status import IntegrationNotes
 from app.llm.chain import SCRIPTED, build_extractor
 from app.llm.extractor import IntentExtractionError
 from app.memory.routes import memory_router
+from app.myday import myday_router
 from app.oauth_web import callback_url, oauth_router
 from app.observability import configure_logging, log_event
 from app.orchestrator.confirmation import explicit_confirmation
@@ -254,6 +255,8 @@ def create_app(
         application.state.close_user_conversations = close_user_conversations
         application.state.google = None
         application.state.whatsapp = None
+        application.state.hub = None
+        application.state.task_store = None
         application.state.integration_notes = IntegrationNotes()
         application.state.tasks = None
         engine: TaskEngine | None = None
@@ -267,9 +270,13 @@ def create_app(
                 application.state.whatsapp = WhatsAppClient(
                     runtime_settings, service, transport=transport
                 )
+            hub = ServiceHub(service, google, transport=transport)
+            task_store = TaskStore(service.database)
+            application.state.hub = hub
+            application.state.task_store = task_store
             engine = TaskEngine(
-                TaskStore(service.database),
-                ServiceHub(service, google, transport=transport).for_user,
+                task_store,
+                hub.for_user,
                 run_blocking=service.run,
                 notes=application.state.integration_notes,
             )
@@ -309,6 +316,7 @@ def create_app(
     application.include_router(personal_router())
     application.include_router(google_router())
     application.include_router(integrations_router())
+    application.include_router(myday_router())
     application.include_router(whatsapp_router())
     application.include_router(memory_router())
     application.include_router(tasks_router())

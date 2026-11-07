@@ -192,7 +192,7 @@
       if (me.available === false) accountButton.hidden = true;
       return;
     }
-    accountButton.textContent = me.user ? "Your account" : "Sign in";
+    accountButton.textContent = me.user ? "Account" : "Sign in";
     renderMode();
     if (!me.user) return;
     byId("account-email").textContent = me.user.email;
@@ -219,6 +219,7 @@
   }
   let firstLoadDone = false;
   window.saathiAccountRefresh = refresh;
+  window.saathiOpenAccount = () => void openAccount();
 
   async function openAccount() {
     await refresh();

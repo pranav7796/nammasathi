@@ -56,11 +56,11 @@
 
   start.addEventListener("click", () => {
     if (window.saathiIsLive?.()) {
-      alert("Switch to Demo shops first. The guided demo uses practice data only.");
+      window.saathiToast?.("Switch to Demo shops first. The guided demo uses practice data only.", "info");
       return;
     }
     if (!signedIn()) {
-      alert("Please sign in or create an account first. Your tasks are saved to your account.");
+      window.saathiToast?.("Please sign in or create an account first. Your tasks are saved to your account.", "info");
       document.querySelector("#account-button")?.click();
       return;
     }

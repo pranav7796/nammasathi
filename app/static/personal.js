@@ -9,10 +9,9 @@
   const dialog = document.querySelector("#personal-dialog");
   const panel = document.querySelector("#personal-widgets");
   const inline = document.querySelector("#genui-inline");
-  const button = document.querySelector("#personal-button");
   const errorLine = document.querySelector("#personal-error");
   const notice = document.querySelector("#genui-message");
-  if (!gui || !dialog || !panel || !inline || !button || !errorLine) return;
+  if (!gui || !dialog || !panel || !inline || !errorLine) return;
 
   const IST = "+05:30";
   const POLL_MS = 1000;
@@ -88,7 +87,21 @@
   }
 
   // Task board: render what the server says, and keep asking while anything is still running.
-  function show(ui, plan) {
+  // Widgets belong to one workflow: starting a different one clears the last one's, so a WhatsApp
+  // composer can never linger beside an email list.
+  let shownFor = "";
+  function show(ui, plan, workflow) {
+    const kind = (workflow && workflow.kind) || "";
+    const key = (plan && plan.id) || kind;
+    if (key && key !== shownFor) {
+      gui.clear(inline);
+      window.clearInterval(poller);
+    }
+    if (key) shownFor = key;
+    if (!key && !(Array.isArray(ui) && ui.length)) {
+      gui.clear(inline); // an order or a fresh start: nothing from another workflow stays
+      shownFor = "";
+    }
     if (Array.isArray(ui) && ui.length) gui.render(inline, ui, { onAction });
     if (plan && plan.active && plan.id) watch(plan.id);
   }
@@ -256,13 +269,13 @@
     if (!dialog.open) dialog.showModal();
   }
 
-  button.addEventListener("click", open);
+  window.saathiOpenPersonal = open;
+  document.querySelector("#myday-manage")?.addEventListener("click", open);
   document.querySelector("#personal-close")?.addEventListener("click", () => dialog.close());
 
   // account.js announces who is signed in. The button only makes sense for a signed-in person.
   window.addEventListener("saathi:me", (event) => {
     const user = event.detail && event.detail.user;
-    button.hidden = !user;
     if (user) resume();
   });
 
@@ -280,6 +293,6 @@
   }
 
   // app.js hands over the `ui` and `plan` of a reply.
-  window.saathiShowWidgets = (ui, plan) => show(ui, plan);
-  window.saathiOpenMyDay = open;
+  window.saathiShowWidgets = (ui, plan, workflow) => show(ui, plan, workflow);
+
 })();

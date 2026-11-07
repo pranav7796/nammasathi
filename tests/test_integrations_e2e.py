@@ -726,3 +726,79 @@ async def test_no_secret_ever_appears_in_the_connected_apps_payload(tmp_path: Pa
         body = (await client.get("/api/integrations")).text
         for secret in ("secret", "wa-token", APP_SECRET, VERIFY_TOKEN, "refresh-1", "access-"):
             assert secret not in body.replace("client_secret", ""), secret
+
+
+# My Day: real data only, and honest when there is none ----------------------------------------
+
+
+async def test_my_day_says_why_when_nothing_is_connected_and_never_shows_demo_data(
+    tmp_path: Path,
+) -> None:
+    world = World()
+    async with live_site(tmp_path, world, google=False, whatsapp=False) as s, s.browser() as client:
+        await sign_up(client)
+        day = (await client.get("/api/myday")).json()
+        assert day["calendar"]["state"] == "not_connected" and day["calendar"]["events"] == []
+        assert "Connect Google Calendar" in day["calendar"]["message"]
+        assert day["emails"]["state"] == "not_connected" and day["emails"]["items"] == []
+        text = json.dumps(day)
+        assert "Rahul" not in text and "Study group" not in text  # no practice data leaks in
+        assert day["reminders"]["state"] == "ok"
+
+
+async def test_my_day_uses_the_real_calendar_email_and_reminders(tmp_path: Path) -> None:
+    world = World()
+    world.google.add(
+        make_message("m1", subject="Contract", labels=("INBOX", "IMPORTANT", "UNREAD"))
+    )
+    today = datetime.now(IST).date().isoformat()
+    world.gcal.add(
+        summary="Design review",
+        start={"dateTime": f"{today}T23:00:00+05:30"},
+        end={"dateTime": f"{today}T23:30:00+05:30"},
+    )
+    async with live_site(tmp_path, world) as s, s.browser() as client:
+        await sign_up(client)
+        await connect(client, world, "gmail")
+        await connect(client, world, "calendar")
+        await client.post("/api/personal/reminders", json={"text": "Call the bank"})
+        day = (await client.get("/api/myday")).json()
+        assert day["calendar"]["state"] == "ok"
+        assert [e["title"] for e in day["calendar"]["events"]] == ["Design review"]
+        assert day["emails"]["state"] == "ok" and day["emails"]["items"][0]["subject"] == "Contract"
+        assert [r["text"] for r in day["reminders"]["items"]] == ["Call the bank"]
+
+
+async def test_my_day_reports_a_revoked_connection_instead_of_going_blank(tmp_path: Path) -> None:
+    world = World()
+    async with live_site(tmp_path, world) as s, s.browser() as client:
+        await sign_up(client)
+        await connect(client, world, "gmail")
+        world.google.refresh_error = "invalid_grant"
+        world.google.expire_access()
+        day = (await client.get("/api/myday")).json()
+        assert day["emails"]["state"] == "authorization_failed"
+        assert "Connect again" in day["emails"]["message"]
+
+
+async def test_my_day_is_private_and_needs_a_sign_in(tmp_path: Path) -> None:
+    world = World()
+    world.google.add(make_message("m1", subject="Private", labels=("INBOX", "IMPORTANT")))
+    async with live_site(tmp_path, world) as s, s.browser() as asha, s.browser() as ravi:
+        assert (await asha.get("/api/myday")).status_code == 401
+        await sign_up(asha)
+        await sign_up(ravi, "ravi@example.com")
+        await connect(asha, world, "gmail")
+        await asha.post("/api/personal/reminders", json={"text": "Asha only"})
+        mine = (await asha.get("/api/myday")).json()
+        theirs = (await ravi.get("/api/myday")).json()
+        assert mine["emails"]["state"] == "ok" and theirs["emails"]["state"] == "not_connected"
+        assert theirs["reminders"]["items"] == []
+
+
+async def test_what_should_i_focus_on_today_starts_the_day_plan(tmp_path: Path) -> None:
+    world = World()
+    async with live_site(tmp_path, world) as s, s.browser() as client:
+        await sign_up(client)
+        reply = await say(client, await start(client), "Saathi, what should I focus on today?")
+        assert reply["workflow"]["kind"] == "day" and reply["plan"]["id"]

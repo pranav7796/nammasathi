@@ -192,6 +192,15 @@ class TaskStore:
             )
         return _task(rows[0]) if rows else None
 
+    def recent(self, user_id: str, limit: int = 8) -> list[TaskRow]:
+        """The person's newest tasks across plans, for the activity list."""
+        with self.database.transaction() as tx:
+            rows = tx.execute(
+                "SELECT * FROM tasks WHERE user_id = ? ORDER BY updated_at DESC, id DESC LIMIT ?",
+                (user_id, limit),
+            )
+        return [_task(row) for row in rows]
+
     def waiting_task(self, user_id: str, kind: str) -> TaskRow | None:
         """The person's newest task of this kind that is waiting for approval."""
         with self.database.transaction() as tx:

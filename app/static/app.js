@@ -154,6 +154,9 @@ function showTrySaying() {
 
 function showLanguage() {
   showTrySaying();
+  for (const pill of document.querySelectorAll(".lang-pill")) {
+    pill.setAttribute("aria-pressed", String(pill.dataset.lang === languageSelect.value));
+  }
   selectedLanguage.textContent = displayLanguage(languageSelect.value);
   for (const choice of languageChoices.children) {
     choice.setAttribute("aria-pressed", String(choice.dataset.lang === languageSelect.value));
@@ -404,18 +407,103 @@ function renderOrder(data, isMock) {
   orderIds.textContent = ids.length ? `${noun}: ${ids.join(", ")}` : "";
 }
 
+const workflowTitle = document.querySelector("#workflow-title");
+const chatLog = document.querySelector("#chat-log");
+const contextHint = document.querySelector("#ctx-hint");
+const LANG_CODE = { "kn-IN": "kn", "hi-IN": "hi", "en-IN": "en" };
+const ORDER_TITLES = { grocery: "Groceries", food: "Food", dining: "Table booking" };
+const WORKFLOW_TITLES = {
+  whatsapp: "WhatsApp message",
+  email: "Email",
+  calendar: "Calendar",
+  reminders: "Reminders",
+  day: "My day",
+  tasks: "Tasks",
+};
+const WAITING_FOR = {
+  to: "who it's for",
+  body: "what to say",
+  intent: "what to say",
+  when: "the day and time",
+  find: "which event",
+  text: "what to remember",
+};
+let previousTurn = null;
+let openOrderTasks = [];
+
+// Which panel shows beside the conversation: the basket only for an order, the task widgets for
+// everything else, and a welcome with suggestions when nothing is under way.
+function contextFor(data) {
+  const kind = (data.workflow && data.workflow.kind) || "none";
+  if (kind === "order") {
+    return (data.cart || []).length || data.state !== "COLLECTING" ? "order" : "welcome";
+  }
+  return kind === "none" ? "welcome" : "tasks";
+}
+
+function titleFor(data) {
+  const kind = (data.workflow && data.workflow.kind) || "none";
+  if (kind === "order") return ORDER_TITLES[data.capability] || "";
+  return WORKFLOW_TITLES[kind] || "";
+}
+
+function addToLog(said, reply, language) {
+  if (!chatLog || (!said && !reply)) return;
+  const make = (who, text) => {
+    const row = document.createElement("div");
+    row.className = `msg ${who}`;
+    const bubble = document.createElement("p");
+    bubble.className = "bubble";
+    bubble.textContent = text;
+    if (language && LANG_CODE[language]) bubble.setAttribute("lang", LANG_CODE[language]);
+    row.append(bubble);
+    return row;
+  };
+  if (said) chatLog.append(make("user", said));
+  if (reply) chatLog.append(make("assistant", reply));
+  while (chatLog.children.length > 40) chatLog.firstElementChild?.remove();
+}
+
+function showWorkflow(data) {
+  const ctx = contextFor(data);
+  if (conversation.dataset) conversation.dataset.ctx = ctx;
+  const title = titleFor(data);
+  if (workflowTitle) {
+    workflowTitle.textContent = title;
+    workflowTitle.hidden = !title;
+  }
+  if (contextHint) {
+    const waiting = data.workflow && data.workflow.waiting_for;
+    contextHint.textContent = waiting ? `Saathi is waiting for ${WAITING_FOR[waiting] || "your answer"}. Say it, or say cancel.` : "";
+    contextHint.hidden = !waiting;
+  }
+  openOrderTasks = (data.tasks || []).filter((task) => task.open && task.item_count > 0);
+  // The generic "try saying" chips belong to starting out, not to a WhatsApp or email task.
+  const chips = document.querySelector("#suggestions");
+  if (chips && ctx !== "welcome") chips.hidden = true;
+}
+
 function renderReply(data) {
+  const language = data.language || languageSelect.value;
+  // The turn that was on screen becomes history, so the conversation reads as a conversation.
+  if (previousTurn && data.transcript !== undefined) {
+    addToLog(previousTurn.said, previousTurn.reply, previousTurn.language);
+  }
   if (data.transcript !== null && data.transcript !== undefined) {
     transcriptNode.textContent = data.transcript || "No speech was recognized.";
+  } else {
+    transcriptNode.textContent = ""; // nothing was heard in this reply: never show a stale line
   }
   assistantNode.textContent = data.assistant_text || "I am ready for your next turn.";
+  const code = LANG_CODE[language];
+  if (code) {
+    assistantNode.setAttribute("lang", code);
+    transcriptNode.setAttribute("lang", code);
+  }
+  previousTurn = { said: transcriptNode.textContent || "", reply: assistantNode.textContent, language };
   renderCart(data);
-  window.saathiShowWidgets?.(data.ui, data.plan);
-  // An email, calendar or reminder reply has no basket: hide the empty basket card beside it.
-  conversation.classList.toggle(
-    "plan-mode",
-    Boolean(data.plan) || (Array.isArray(data.ui) && data.ui.length > 0 && !(data.cart || []).length),
-  );
+  showWorkflow(data);
+  window.saathiShowWidgets?.(data.ui, data.plan, data.workflow);
   if (data.commerce_mode === "swiggy") window.saathiAccountRefresh?.();
   scriptedNote.hidden = data.scripted_understanding !== true;
   if (SHOW_TIMINGS && data.timings_ms) {
@@ -834,11 +922,41 @@ window.saathiSay = async (text) => {
 };
 window.saathiIsLive = () => liveMode;
 
-// The header gains a shadow once the page scrolls under it.
-const masthead = document.querySelector(".masthead");
-const markStuck = () => masthead?.classList.toggle("is-stuck", window.scrollY > 8);
-window.addEventListener("scroll", markStuck, { passive: true });
-markStuck();
+// Switching language mid-conversation. An order's spoken readback is bound to one language, so with
+// an order open it asks to finish that first. Otherwise it starts a fresh conversation in the new
+// language and keeps the history on screen.
+async function switchLanguage(code) {
+  if (!sessionId) {
+    languageSelect.value = code;
+    showLanguage();
+    return;
+  }
+  if (code === languageSelect.value || busy) return;
+  if (openOrderTasks.length) {
+    window.saathiToast?.("You have an order open. Finish or cancel it, then switch language.", "info");
+    return;
+  }
+  languageSelect.value = code;
+  showLanguage();
+  const divider = document.createElement("div");
+  divider.className = "chat-divider";
+  divider.textContent = `Now in ${displayLanguage(code)}`;
+  chatLog?.append(divider);
+  previousTurn = null;
+  await startConversation({ autoRecord: false });
+}
+
+for (const pill of document.querySelectorAll(".lang-pill")) {
+  pill.addEventListener("click", () => void switchLanguage(pill.dataset.lang));
+}
+
+for (const chip of document.querySelectorAll(".prompt-chip")) {
+  chip.addEventListener("click", () => {
+    tryCapability = chip.dataset.cap;
+    void window.saathiSay(currentPhrase());
+  });
+}
+
 showTrySaying();
 void loadAddresses().catch((error) => {
   showError(error.message);
@@ -864,6 +982,8 @@ backButton.addEventListener("click", () => {
 newSessionButton.addEventListener("click", () => {
   sessionStorage.removeItem(SESSION_STORAGE_KEY);
   sessionId = null;
+  previousTurn = null;
+  chatLog?.replaceChildren();
   conversation.hidden = true;
   startPanel.hidden = false;
   heardReadback = null;
