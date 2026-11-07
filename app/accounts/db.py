@@ -122,6 +122,77 @@ _MIGRATIONS: tuple[tuple[str, ...], ...] = (
         )""",
         "CREATE INDEX notes_user ON notes(user_id, updated_at)",
     ),
+    (
+        # Connections to other services (Google), one row per person and provider. The ciphertext is
+        # AES-GCM bound to the user and provider, like Swiggy tokens. Never stored in plain text.
+        """CREATE TABLE connections (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            ciphertext TEXT NOT NULL,
+            scopes TEXT NOT NULL,
+            account_label TEXT NOT NULL,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL,
+            PRIMARY KEY (user_id, provider)
+        )""",
+        # One request, split into tasks. The args column holds JSON validated per task kind.
+        """CREATE TABLE plans (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            request_text TEXT NOT NULL,
+            language TEXT NOT NULL,
+            demo INTEGER NOT NULL,
+            created_at BIGINT NOT NULL
+        )""",
+        "CREATE INDEX plans_user ON plans(user_id, created_at)",
+        """CREATE TABLE tasks (
+            id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            args TEXT NOT NULL,
+            depends_on TEXT NOT NULL,
+            status TEXT NOT NULL,
+            side_effect INTEGER NOT NULL,
+            approved_hash TEXT,
+            result TEXT,
+            error TEXT,
+            attempts INTEGER NOT NULL,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )""",
+        "CREATE INDEX tasks_plan ON tasks(plan_id, position)",
+        "CREATE INDEX tasks_user ON tasks(user_id, updated_at)",
+        # What the person chose to let Saathi remember, and who they often contact.
+        """CREATE TABLE memory_items (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at BIGINT NOT NULL,
+            PRIMARY KEY (user_id, key)
+        )""",
+        """CREATE TABLE contacts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            email TEXT,
+            phone TEXT,
+            created_at BIGINT NOT NULL
+        )""",
+        "CREATE INDEX contacts_user ON contacts(user_id, name)",
+        # Delivery status Meta reports for a WhatsApp message a person approved. No message text.
+        """CREATE TABLE whatsapp_messages (
+            wa_message_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            recipient_label TEXT NOT NULL,
+            status TEXT NOT NULL,
+            detail TEXT NOT NULL,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )""",
+        "CREATE INDEX whatsapp_user ON whatsapp_messages(user_id, created_at)",
+    ),
 )
 
 

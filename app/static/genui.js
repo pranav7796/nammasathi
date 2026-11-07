@@ -20,12 +20,16 @@
   const MAX_ROWS = 50;
   const SHARE_MAX = 1500;
   const ID_RE = /^[a-z0-9_.:-]{1,64}$/;
+  const EMAIL_ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
+  const SUFFIX_RE = /^[a-z0-9_.-]{1,40}$/;
   const FIELD_RE = /^[a-z][a-z0-9_]{0,31}$/;
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
   const ISO_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
   const ISO_OFFSET_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
   const STATUSES = ["pending", "running", "waiting_for_input", "waiting_for_approval", "completed", "failed", "cancelled"];
+  const PLAN_KINDS = ["event", "reminder", "email", "task"];
+  const PRIORITIES = ["low", "normal", "high"];
   const FIELD_KINDS = ["text", "textarea", "select", "checkbox", "date", "time", "number"];
 
   /* ---------------------------------------------------------------- validation */
@@ -109,6 +113,17 @@
     return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d ? "" : "not a real date";
   });
   const money = S.str(1, 32);
+  // A list whose entries must differ in one property (ids and keys become action suffixes).
+  const distinct = (item, min, max, prop) => S.any((v, d) => {
+    const e = S.arr(item, min, max).check(v, d);
+    if (e) return e;
+    const seen = {};
+    for (const x of v) {
+      if (own(seen, x[prop])) return `duplicate ${prop} "${x[prop]}"`;
+      seen[x[prop]] = true;
+    }
+    return "";
+  });
 
   const SCHEMAS = {
     heading: { text: S.str(0), level: S.opt(S.int(1, 3)) },
@@ -155,9 +170,12 @@
         S.obj({
           id: sub, title: S.str(0), status: S.oneOf(STATUSES), detail: S.opt(S.str(0)),
           retry_action_id: S.opt(S.str(1, 200)), cancel_action_id: S.opt(S.str(1, 200)),
+          approve_action_id: S.opt(S.str(1, 200)), view_action_id: S.opt(S.str(1, 200)), edit_action_id: S.opt(S.str(1, 200)),
         }),
         0, 100,
       ),
+      demo: S.opt(S.bool()),
+      summary: S.opt(S.str(0)),
     },
     progress: { label: S.str(0), value: S.num(0, 100) },
     cart: {
@@ -191,6 +209,10 @@
       body: S.str(0),
       send: action,
       copy_enabled: S.opt(S.bool()),
+      state: S.oneOf(["draft", "sent", "copied", "failed"]),
+      detail: S.opt(S.str(0)),
+      demo: S.bool(),
+      editable: S.opt(S.bool()),
     },
     calendar_view: {
       title: S.str(0),
@@ -201,6 +223,7 @@
         }),
         0, 31,
       ),
+      demo: S.opt(S.bool()),
     },
     reminder_list: {
       title: S.str(0),
@@ -224,6 +247,51 @@
       kind: S.oneOf(["loading", "success", "empty", "error"]),
       message: S.str(0),
       retry: S.opt(action),
+    },
+    email_list: {
+      title: S.str(1),
+      items: distinct(
+        S.obj({
+          id: S.re(EMAIL_ID_RE, 100), sender: S.str(1, 300), subject: S.str(0, 500), snippet: S.str(0, 1000),
+          received: S.re(ISO_RE, 40), unread: S.bool(), important: S.bool(), needs_reply: S.bool(),
+        }),
+        0, 10, "id",
+      ),
+      empty_text: S.str(0),
+      demo: S.bool(),
+    },
+    event_preview: {
+      title: S.str(1),
+      fields: S.obj({
+        title: S.str(1, 300), date: dateKey, start: S.re(TIME_RE), minutes: S.int(1, 1440),
+        attendees: S.arr(S.str(1, 320), 0, 10),
+      }),
+      conflicts: S.arr(S.obj({ title: S.str(1, 300), start: S.re(TIME_RE), end: S.re(TIME_RE) }), 0, 10),
+      state: S.oneOf(["draft", "created", "failed", "cancelled"]),
+      detail: S.opt(S.str(0)),
+      approve: action,
+      cancel: S.opt(action),
+      demo: S.bool(),
+      editable: S.bool(),
+    },
+    day_planner: {
+      title: S.str(1),
+      date: dateKey,
+      items: distinct(
+        S.obj({
+          id: S.re(SUFFIX_RE, 40), kind: S.oneOf(PLAN_KINDS), title: S.str(1, 300), time: S.opt(S.re(TIME_RE)),
+          done: S.bool(), priority: S.oneOf(PRIORITIES), detail: S.opt(S.str(0, 500)),
+        }),
+        0, 40, "id",
+      ),
+      demo: S.bool(),
+      editable: S.bool(),
+    },
+    memory_list: {
+      title: S.str(1),
+      items: distinct(S.obj({ key: S.re(SUFFIX_RE, 40), label: S.str(1, 200), value: S.str(0, 1000) }), 0, 30, "key"),
+      empty_text: S.str(0),
+      consent_text: S.str(1),
     },
   };
 
@@ -518,46 +586,93 @@
     return root;
   };
 
+  /* ---- shared helpers for the richer widgets */
+  const DEMO_BADGE = "Demo: nothing real happens";
+  function headRow(title, demo, demoText) {
+    const head = h("div", "genui-row");
+    add(head, titleEl(title, "h3", "genui-title genui-grow"));
+    if (demo) add(head, badge(demoText || DEMO_BADGE, "genui-badge-demo"));
+    return head;
+  }
+  // A text + icon status label, so a state never relies on colour alone.
+  function stateChip(cls, icon, text) {
+    const chip = h("span", `genui-state ${cls}`);
+    const ic = h("span", "genui-state-icon", icon);
+    ic.setAttribute("aria-hidden", "true");
+    return add(chip, ic, h("span", "", text));
+  }
+  // Fire one action and rest the given buttons until the widget is replaced (or the call fails).
+  function fireOnce(ctx, root, locks, wid, actionId, values) {
+    for (const b of locks) b.disabled = true;
+    root.setAttribute("aria-busy", "true");
+    const r = ctx.act(wid, actionId, values);
+    if (isThenable(r)) {
+      r.then(null, () => {
+        for (const b of locks) b.disabled = !!b.__off;
+        root.removeAttribute("aria-busy");
+      });
+    }
+  }
+  function relTime(iso, now) {
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return iso;
+    const mins = Math.round((now - t) / 60000);
+    if (mins < -1) return fmtDateTime(iso);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours} h ago`;
+    const days = Math.floor(hours / 24);
+    if (days === 1) return "yesterday";
+    if (days < 7) return `${days} days ago`;
+    return fmtDateTime(iso);
+  }
+
   /* ---- task board */
   const STATUS_VIEW = {
     pending: ["○", "Pending"],
     running: ["↻", "Running"],
     waiting_for_input: ["?", "Waiting for you"],
-    waiting_for_approval: ["⏸", "Needs your approval"],
+    waiting_for_approval: ["!", "Needs your approval"],
     completed: ["✓", "Done"],
     failed: ["✕", "Failed"],
-    cancelled: ["⊘", "Cancelled"],
+    cancelled: ["–", "Cancelled"],
   };
   const CANCELLABLE = ["pending", "running", "waiting_for_input", "waiting_for_approval"];
 
   BUILDERS.task_board = (w, ctx) => {
-    const root = h("div");
+    const root = h("div", "genui-board");
     root.setAttribute("aria-live", "polite");
-    add(root, titleEl(w.title));
+    add(root, headRow(w.title, w.demo, "Demo: nothing real is done"));
+    if (w.summary) add(root, h("p", "genui-board-summary", w.summary));
     if (!w.tasks.length) add(root, h("p", "genui-empty", "No tasks yet."));
     const ul = h("ul", "genui-list genui-tasks");
     for (const t of w.tasks) {
       const li = h("li", `genui-list-item genui-task genui-status-${t.status}`);
-      const main = h("div", "genui-grow");
-      const chip = h("span", `genui-chip genui-chip-${t.status}`);
-      add(chip, h("span", "genui-chip-icon", STATUS_VIEW[t.status][0]), h("span", "", STATUS_VIEW[t.status][1]));
-      chip.firstChild.setAttribute("aria-hidden", "true");
+      const mark = h("span", `genui-task-mark genui-mark-${t.status}`, STATUS_VIEW[t.status][0]);
+      mark.setAttribute("aria-hidden", "true");
+      const main = h("div", "genui-grow genui-task-main");
+      const chip = h("span", `genui-chip genui-chip-${t.status}`, STATUS_VIEW[t.status][1]);
       add(main, h("span", "genui-item-title", t.title), chip);
       if (t.detail) add(main, h("span", "genui-item-detail", t.detail));
-      add(li, main);
-      const bar = h("div", "genui-actions genui-actions-tight");
-      if (t.retry_action_id && t.status === "failed") {
-        const b = button("Retry", "genui-btn-secondary", `retry:${t.id}`);
-        b.setAttribute("aria-label", `Retry: ${t.title}`);
-        b.addEventListener("click", () => ctx.act(w.id, t.retry_action_id, { task_id: t.id }));
+      add(li, mark, main);
+      const bar = h("div", "genui-actions genui-actions-tight genui-task-actions");
+      const mk = (label, cls, key, actionId, then) => {
+        const b = button(label, cls, `${key}:${t.id}`);
+        b.setAttribute("aria-label", `${label}: ${t.title}`);
+        b.addEventListener("click", () => then(b, actionId));
         add(bar, b);
+      };
+      if (t.approve_action_id && t.status === "waiting_for_approval") {
+        mk("Approve", "genui-btn-primary", "approve", t.approve_action_id, (b, id) => {
+          if (b.disabled) return;
+          fireOnce(ctx, root, [b], w.id, id, { task_id: t.id });
+        });
       }
-      if (t.cancel_action_id && CANCELLABLE.indexOf(t.status) !== -1) {
-        const b = button("Cancel", "genui-btn-danger", `cancel:${t.id}`);
-        b.setAttribute("aria-label", `Cancel: ${t.title}`);
-        b.addEventListener("click", () => ctx.act(w.id, t.cancel_action_id, { task_id: t.id }));
-        add(bar, b);
-      }
+      if (t.view_action_id) mk("View", "genui-btn-secondary", "view", t.view_action_id, (b, id) => ctx.act(w.id, id, { task_id: t.id }));
+      if (t.edit_action_id) mk("Edit", "genui-btn-secondary", "edit", t.edit_action_id, (b, id) => ctx.act(w.id, id, { task_id: t.id }));
+      if (t.retry_action_id && t.status === "failed") mk("Retry", "genui-btn-secondary", "retry", t.retry_action_id, (b, id) => ctx.act(w.id, id, { task_id: t.id }));
+      if (t.cancel_action_id && CANCELLABLE.indexOf(t.status) !== -1) mk("Cancel", "genui-btn-danger", "cancel", t.cancel_action_id, (b, id) => ctx.act(w.id, id, { task_id: t.id }));
       if (bar.children.length) add(li, bar);
       add(ul, li);
     }
@@ -713,56 +828,99 @@
   };
 
   /* ---- composer */
+  const COMPOSER_STATE = {
+    draft: ["✎", "Draft, not sent"],
+    copied: ["⧉", "Copied, not sent"],
+    sent: ["✓", "Sent"],
+    failed: ["✕", "Failed"],
+  };
   BUILDERS.composer = (w, ctx) => {
-    const root = h("div");
-    add(root, h("h3", "genui-title", w.channel === "email" ? "Draft email" : "Draft message"));
+    const root = h("div", `genui-composer genui-composer-${w.state}`);
+    const [icon, label] = COMPOSER_STATE[w.state];
+    // A demo is never described as sent: the label says so plainly.
+    const stateText = w.demo && w.state === "sent" ? "Demo: not really sent" : label;
+    const head = headRow(w.channel === "email" ? "Draft email" : "Draft message", w.demo, "Demo: nothing is really sent");
+    add(head, stateChip(`genui-state-${w.state}`, icon, stateText));
+    add(root, head);
+    if (w.detail) {
+      const d = h("p", "genui-detail", w.detail);
+      d.setAttribute("role", "status");
+      add(root, d);
+    }
+    const live = w.state === "draft" && w.editable !== false;
     const inputs = {};
     const mk = (name, labelText, tag) => {
       const id = uid("genui-c");
       const key = `${w.id}/${name}`;
       const wrap = h("div", "genui-field");
-      const label = h("label", "genui-label", labelText);
-      label.setAttribute("for", id);
+      const lab = h("label", "genui-label", labelText);
+      lab.setAttribute("for", id);
       const input = h(tag, "genui-input");
       attrs(input, { id, name, "data-key": key });
       if (tag === "textarea") input.setAttribute("rows", "8");
       else input.setAttribute("type", "text");
       input.setAttribute("maxlength", MAX_TEXT);
-      return { wrap: add(wrap, label, input), input, key };
+      return { wrap: add(wrap, lab, input), input, key };
     };
     const parts = [];
     if (w.to !== undefined && w.to !== null) parts.push(["to", "To", "input", w.to]);
     if (w.subject !== undefined && w.subject !== null) parts.push(["subject", "Subject", "input", w.subject]);
     parts.push(["body", "Message", "textarea", w.body]);
-    for (const [name, label, tag, value] of parts) {
-      const f = mk(name, label, tag);
-      f.input.value = value;
-      const prev = ctx.top.prev[f.key];
-      if (prev) { f.input.value = String(prev.value); ctx.top.dirty[f.key] = prev; }
-      const remember = () => { ctx.top.dirty[f.key] = { kind: "text", value: f.input.value }; };
-      f.input.addEventListener("input", remember);
-      inputs[name] = f.input;
-      add(root, f.wrap);
+    const current = {};
+    for (const [name, labelText, tag, value] of parts) {
+      current[name] = value;
+      if (live) {
+        const f = mk(name, labelText, tag);
+        f.input.value = value;
+        const prev = ctx.top.prev[f.key];
+        if (prev) { f.input.value = String(prev.value); ctx.top.dirty[f.key] = prev; }
+        const remember = () => { ctx.top.dirty[f.key] = { kind: "text", value: f.input.value }; };
+        f.input.addEventListener("input", remember);
+        inputs[name] = f.input;
+        add(root, f.wrap);
+      } else {
+        const dl = h("dl", "genui-details genui-composer-read");
+        add(dl, h("dt", "", labelText), h("dd", name === "body" ? "genui-composer-body" : "", value));
+        add(root, dl);
+      }
     }
     const values = () => {
       const out = {};
-      for (const k of Object.keys(inputs)) out[k] = inputs[k].value;
+      for (const k of Object.keys(current)) out[k] = live ? inputs[k].value : current[k];
       return out;
     };
-    const note = h("p", "genui-help", "Nothing is sent by Namma Saathi. Check the draft, edit it, then choose.");
     const msg = h("p", "genui-help", "");
     msg.setAttribute("aria-live", "polite");
     const bar = h("div", "genui-actions");
-    const send = actionButton(w.send, w.id, ctx, values);
-    send.removeAttribute("data-key");
-    send.setAttribute("data-key", "send");
-    add(bar, send);
+    const locks = [];
+    if (w.state === "draft") {
+      add(root, h("p", "genui-help", w.demo ? "This is a demo. Nothing is really sent." : "Nothing is sent until you choose Send. Check the draft and edit it first."));
+      const { style: sendVariant } = w.send;
+      const send = button(w.send.label, `genui-btn-${sendVariant || "primary"}`, "send");
+      if (w.send.disabled) { send.disabled = true; send.__off = true; }
+      send.addEventListener("click", () => {
+        if (send.disabled) return;
+        fireOnce(ctx, root, locks, w.id, w.send.action_id, values());
+      });
+      locks.push(send);
+      add(bar, send);
+      const m = /^task\.approve:(.+)$/.exec(w.send.action_id);
+      if (live && m) {
+        const save = button("Save changes", "genui-btn-secondary", "save");
+        save.addEventListener("click", () => {
+          if (save.disabled) return;
+          ctx.act(w.id, `task.edit:${m[1]}`, values());
+          msg.textContent = "Your edits were sent to the draft.";
+        });
+        add(bar, save);
+      }
+    }
     if (w.copy_enabled) {
       const copy = button("Copy", "genui-btn-secondary", "copy");
       copy.addEventListener("click", () => copyText(composeText(w.channel, values()), msg));
       add(bar, copy);
     }
-    return add(root, note, bar, msg);
+    return add(root, bar, msg);
   };
   function composeText(channel, v) {
     const lines = [];
@@ -791,7 +949,7 @@
   /* ---- calendar view */
   BUILDERS.calendar_view = (w) => {
     const root = h("div");
-    add(root, titleEl(w.title));
+    add(root, headRow(w.title, w.demo, "Demo: example calendar"));
     if (!w.days.length) add(root, h("p", "genui-empty", "Nothing scheduled."));
     const grid = h("div", "genui-cal");
     for (const day of w.days) {
@@ -880,6 +1038,323 @@
     if (w.kind === "loading") root.setAttribute("aria-busy", "true");
     if (w.kind === "error" && w.retry) add(root, actionButton(w.retry, w.id, ctx));
     return root;
+  };
+
+  /* ---- email list */
+  BUILDERS.email_list = (w, ctx) => {
+    const root = h("div");
+    add(root, headRow(w.title, w.demo, "Demo: example emails"));
+    if (!w.items.length) {
+      add(root, h("p", "genui-empty", w.empty_text || "No emails to show."));
+      return root;
+    }
+    const now = Date.now();
+    const ul = h("ul", "genui-list genui-emails");
+    for (const m of w.items) {
+      const li = h("li", `genui-list-item genui-email${m.unread ? " genui-unread" : ""}`);
+      const main = h("div", "genui-grow");
+      const top = h("div", "genui-email-top");
+      const when = h("time", "genui-email-time", relTime(m.received, now));
+      attrs(when, { datetime: m.received, title: fmtDateTime(m.received) });
+      add(top, h("span", "genui-email-sender", m.sender), when);
+      add(main, top, h("span", "genui-email-subject", m.subject || "(no subject)"));
+      if (m.snippet) add(main, h("span", "genui-item-detail genui-email-snippet", m.snippet));
+      const chips = h("div", "genui-chips");
+      if (m.unread) add(chips, stateChip("genui-tag-unread", "●", "Unread"));
+      if (m.important) add(chips, stateChip("genui-tag-important", "★", "Important"));
+      if (m.needs_reply) add(chips, stateChip("genui-tag-reply", "↩", "Needs reply"));
+      if (chips.children.length) add(main, chips);
+      add(li, main);
+      const bar = h("div", "genui-actions genui-actions-tight");
+      const open = button("Open", "genui-btn-secondary", `open:${m.id}`);
+      open.setAttribute("aria-label", `Open email from ${m.sender}: ${m.subject}`);
+      open.addEventListener("click", () => ctx.act(w.id, `email.open:${m.id}`, {}));
+      const reply = button("Reply", "genui-btn-primary", `reply:${m.id}`);
+      reply.setAttribute("aria-label", `Reply to ${m.sender}: ${m.subject}`);
+      reply.addEventListener("click", () => ctx.act(w.id, `email.reply:${m.id}`, {}));
+      add(bar, open, reply);
+      add(li, bar);
+      add(ul, li);
+    }
+    return add(root, ul);
+  };
+
+  /* ---- event preview */
+  const EVENT_STATE = {
+    draft: ["✎", "Draft, not created"],
+    created: ["✓", "Created"],
+    failed: ["✕", "Failed"],
+    cancelled: ["–", "Cancelled"],
+  };
+  const splitLines = (v) => String(v).split(/\r?\n/).map((x) => x.trim()).filter((x) => x);
+
+  BUILDERS.event_preview = (w, ctx) => {
+    const root = h("div", `genui-event-preview genui-event-${w.state}`);
+    const f = w.fields;
+    const [icon, label] = EVENT_STATE[w.state];
+    const stateText = w.demo && w.state === "created" ? "Demo: not really created" : label;
+    const head = headRow(w.title, w.demo, "Demo: nothing is really created");
+    add(head, stateChip(`genui-state-${w.state}`, icon, stateText));
+    add(root, head);
+    if (w.conflicts.length) {
+      const box = h("div", "genui-conflicts");
+      box.setAttribute("role", "group");
+      box.setAttribute("aria-label", "Clash with your calendar");
+      const ic = h("span", "genui-state-icon", "!");
+      ic.setAttribute("aria-hidden", "true");
+      add(box, add(h("p", "genui-conflicts-title"), ic, h("span", "", " This overlaps with something already in your calendar:")));
+      const ul = h("ul", "genui-conflict-list");
+      for (const c of w.conflicts) add(ul, h("li", "", `${c.title}, ${c.start}–${c.end}`));
+      add(root, add(box, ul));
+    }
+    if (w.detail) {
+      const d = h("p", "genui-detail", w.detail);
+      d.setAttribute("role", "status");
+      add(root, d);
+    }
+    const draft = w.state === "draft";
+    let form = null;
+    if (draft && w.editable) {
+      const defs = [
+        { name: "title", label: "Title", kind: "text", required: true, value: f.title, max_length: 300 },
+        { name: "date", label: "Date", kind: "date", required: true, value: f.date },
+        { name: "start", label: "Time", kind: "time", required: true, value: f.start },
+        { name: "minutes", label: "Length in minutes", kind: "number", required: true, value: f.minutes, min: 1, max: 1440 },
+        { name: "attendees", label: "People (one per line)", kind: "textarea", value: f.attendees.join("\n"), max_length: 1000 },
+      ];
+      form = { el: h("form", "genui-form-el"), fields: defs.map((d) => buildField(d, ctx, w.id)) };
+      form.el.setAttribute("novalidate", "novalidate");
+      form.el.addEventListener("submit", (ev) => { if (ev && typeof ev.preventDefault === "function") ev.preventDefault(); });
+      for (const fl of form.fields) add(form.el, fl.wrap);
+      add(root, form.el);
+    } else {
+      const dl = h("dl", "genui-details");
+      add(dl, h("dt", "", "Title"), h("dd", "", f.title));
+      add(dl, h("dt", "", "Date"), h("dd", "", fmtDay(f.date)));
+      add(dl, h("dt", "", "Time"), h("dd", "", f.start));
+      add(dl, h("dt", "", "Length"), h("dd", "", `${f.minutes} minutes`));
+      add(dl, h("dt", "", "People"), h("dd", "", f.attendees.length ? f.attendees.join(", ") : "Just you"));
+      add(root, dl);
+    }
+    if (!draft) return root;
+    const bar = h("div", "genui-actions");
+    const locks = [];
+    const msg = h("p", "genui-help", "");
+    msg.setAttribute("aria-live", "polite");
+    const collect = () => {
+      if (!form) return { title: f.title, date: f.date, start: f.start, minutes: f.minutes, attendees: f.attendees.slice() };
+      let firstBad = null;
+      const out = {};
+      for (const fl of form.fields) {
+        let problem = fl.problem();
+        const v = fl.read();
+        if (!problem && fl.name === "minutes" && !Number.isInteger(v)) problem = "Enter whole minutes.";
+        if (!problem && fl.name === "date" && dateKey.check(v)) problem = "Pick a real date.";
+        if (!problem && fl.name === "start" && !TIME_RE.test(v)) problem = "Pick a time.";
+        if (!problem && fl.name === "title" && String(v).trim() === "") problem = "This is required.";
+        if (!problem && fl.name === "attendees") {
+          const lines = splitLines(v);
+          if (lines.length > 10) problem = "At most 10 people.";
+          else if (lines.some((x) => x.length > 320)) problem = "Each line can have at most 320 characters.";
+        }
+        fl.show(problem);
+        if (problem && !firstBad) firstBad = fl;
+        out[fl.name] = fl.name === "attendees" ? splitLines(v) : fl.name === "title" ? String(v).trim() : v;
+      }
+      if (firstBad) {
+        msg.textContent = "Please fix the highlighted fields.";
+        if (typeof firstBad.input.focus === "function") firstBad.input.focus();
+        return null;
+      }
+      msg.textContent = "";
+      return out;
+    };
+    const { style: approveVariant } = w.approve;
+    const approve = button(w.approve.label, `genui-btn-${approveVariant || "primary"}`, "approve");
+    if (w.approve.disabled) { approve.disabled = true; approve.__off = true; }
+    approve.addEventListener("click", () => {
+      if (approve.disabled) return;
+      const values = collect();
+      if (!values) return;
+      fireOnce(ctx, root, locks, w.id, w.approve.action_id, values);
+    });
+    locks.push(approve);
+    add(bar, approve);
+    if (w.cancel) {
+      const { style: cancelVariant } = w.cancel;
+      const cancel = button(w.cancel.label, `genui-btn-${cancelVariant || "secondary"}`, "cancel");
+      if (w.cancel.disabled) { cancel.disabled = true; cancel.__off = true; }
+      cancel.addEventListener("click", () => {
+        if (cancel.disabled) return;
+        fireOnce(ctx, root, locks, w.id, w.cancel.action_id, {});
+      });
+      locks.push(cancel);
+      add(bar, cancel);
+    }
+    return add(root, bar, msg);
+  };
+
+  /* ---- day planner */
+  const KIND_VIEW = { event: ["◷", "Event"], reminder: ["🔔", "Reminder"], email: ["✉", "Email"], task: ["☐", "Task"] };
+  const PRIORITY_LABEL = { low: "Low", normal: "Normal", high: "High" };
+
+  BUILDERS.day_planner = (w, ctx) => {
+    const root = h("div", "genui-planner");
+    add(root, headRow(w.title, w.demo, "Demo: example plan"));
+    const doneCount = w.items.filter((x) => x.done).length;
+    const sum = h("p", "genui-board-summary", `${fmtDay(w.date)}. ${doneCount} of ${w.items.length} done.`);
+    sum.setAttribute("aria-live", "polite");
+    add(root, sum);
+    if (!w.items.length) add(root, h("p", "genui-empty", "Nothing planned yet."));
+    const ol = h("ol", "genui-list genui-plan");
+    w.items.forEach((it, i) => {
+      const li = h("li", `genui-list-item genui-plan-item genui-prio-${it.priority}${it.done ? " genui-done" : ""}`);
+      const main = h("div", "genui-plan-main");
+      if (w.editable) {
+        const id = uid("genui-pl");
+        const cb = h("input", "genui-checkbox");
+        attrs(cb, { type: "checkbox", id, name: `done_${it.id}`, "data-key": `toggle:${it.id}` });
+        cb.checked = it.done;
+        cb.setAttribute("aria-label", `Done: ${it.title}`);
+        cb.addEventListener("change", () => ctx.act(w.id, `plan.toggle:${it.id}`, {}));
+        add(main, cb);
+      }
+      const text = h("div", "genui-grow");
+      add(text, h("span", "genui-item-title", it.title));
+      const meta = h("div", "genui-chips");
+      const [kIcon, kText] = KIND_VIEW[it.kind];
+      add(meta, stateChip(`genui-kind genui-kind-${it.kind}`, kIcon, kText));
+      if (it.time) add(meta, h("span", "genui-time-chip", it.time));
+      if (it.priority === "high") add(meta, stateChip("genui-tag-high", "▲", "High priority"));
+      if (!w.editable) add(meta, h("span", "genui-item-detail", it.done ? "Done" : "To do"));
+      add(text, meta);
+      if (it.detail) add(text, h("span", "genui-item-detail", it.detail));
+      add(main, text);
+      add(li, main);
+      if (w.editable) {
+        const bar = h("div", "genui-actions genui-actions-tight genui-plan-controls");
+        const sid = uid("genui-ps");
+        const pwrap = h("div", "genui-plan-prio");
+        const plabel = h("label", "genui-plan-prio-label", "Priority");
+        plabel.setAttribute("for", sid);
+        const sel = h("select", "genui-input genui-plan-select");
+        attrs(sel, { id: sid, name: `priority_${it.id}`, "data-key": `priority:${it.id}` });
+        sel.setAttribute("aria-label", `Priority for ${it.title}`);
+        for (const p of PRIORITIES) {
+          const op = h("option", "", PRIORITY_LABEL[p]);
+          op.setAttribute("value", p);
+          op.value = p;
+          add(sel, op);
+        }
+        sel.value = it.priority;
+        sel.addEventListener("change", () => ctx.act(w.id, `plan.priority:${it.id}`, { priority: sel.value }));
+        add(pwrap, plabel, sel);
+        const up = button("↑ Up", "genui-btn-secondary", `up:${it.id}`);
+        up.setAttribute("aria-label", `Move up: ${it.title}`);
+        if (i === 0) up.disabled = true;
+        up.addEventListener("click", () => { if (!up.disabled) ctx.act(w.id, `plan.move:${it.id}`, { direction: "up" }); });
+        const down = button("↓ Down", "genui-btn-secondary", `down:${it.id}`);
+        down.setAttribute("aria-label", `Move down: ${it.title}`);
+        if (i === w.items.length - 1) down.disabled = true;
+        down.addEventListener("click", () => { if (!down.disabled) ctx.act(w.id, `plan.move:${it.id}`, { direction: "down" }); });
+        add(bar, pwrap, up, down);
+        add(li, bar);
+      }
+      add(ol, li);
+    });
+    add(root, ol);
+    if (w.editable) {
+      const form = h("form", "genui-form-el genui-plan-add");
+      form.setAttribute("novalidate", "novalidate");
+      const titleField = buildField({ name: "title", label: "Add to your day", kind: "text", required: true, max_length: 200 }, ctx, w.id);
+      const timeField = buildField({ name: "time", label: "Time (optional)", kind: "time" }, ctx, w.id);
+      const submit = button("Add", "genui-btn-primary", "add");
+      submit.setAttribute("type", "submit");
+      const status = h("p", "genui-help", "");
+      status.setAttribute("aria-live", "polite");
+      add(form, titleField.wrap, timeField.wrap, add(h("div", "genui-actions"), submit), status);
+      form.addEventListener("submit", (ev) => {
+        if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
+        const msg = titleField.problem() || timeField.problem();
+        titleField.show(titleField.problem());
+        timeField.show(timeField.problem());
+        if (msg) {
+          status.textContent = "Please fix the highlighted fields.";
+          return;
+        }
+        const values = { title: String(titleField.read()).trim() };
+        const t = String(timeField.read());
+        if (t) values.time = t;
+        status.textContent = "";
+        ctx.act(w.id, "plan.add", values);
+        for (const [fl, name] of [[titleField, "title"], [timeField, "time"]]) {
+          fl.input.value = "";
+          ctx.top.dirty[`${w.id}/${name}`] = { kind: name === "time" ? "time" : "text", value: "" };
+        }
+      });
+      add(root, form);
+    }
+    return root;
+  };
+
+  /* ---- memory list */
+  BUILDERS.memory_list = (w, ctx) => {
+    const root = h("div", "genui-memory");
+    add(root, titleEl(w.title));
+    add(root, h("p", "genui-consent", w.consent_text));
+    if (!w.items.length) {
+      add(root, h("p", "genui-empty", w.empty_text || "Nothing is remembered yet."));
+      return root;
+    }
+    const ul = h("ul", "genui-list genui-memories");
+    for (const m of w.items) {
+      const li = h("li", "genui-list-item genui-memory-item");
+      const main = h("div", "genui-grow");
+      add(main, h("span", "genui-item-detail genui-memory-label", m.label), h("span", "genui-item-title genui-memory-value", m.value));
+      add(li, main);
+      const forget = button("Forget", "genui-btn-danger", `forget:${m.key}`);
+      forget.setAttribute("aria-label", `Forget: ${m.label}`);
+      forget.addEventListener("click", () => {
+        if (forget.disabled) return;
+        fireOnce(ctx, li, [forget], w.id, `memory.forget:${m.key}`, {});
+      });
+      const form = h("form", "genui-memory-form");
+      form.setAttribute("novalidate", "novalidate");
+      const id = uid("genui-m");
+      const key = `${w.id}/mem:${m.key}`;
+      const lab = h("label", "genui-label", `Change ${m.label}`);
+      lab.setAttribute("for", id);
+      const input = h("input", "genui-input");
+      attrs(input, { id, type: "text", name: `value_${m.key}`, maxlength: 500, "data-key": key });
+      const prev = ctx.top.prev[key];
+      if (prev) { input.value = String(prev.value); ctx.top.dirty[key] = prev; }
+      input.addEventListener("input", () => { ctx.top.dirty[key] = { kind: "text", value: input.value }; });
+      const err = h("p", "genui-error", "");
+      err.setAttribute("role", "alert");
+      err.hidden = true;
+      const save = button("Save", "genui-btn-primary", `save:${m.key}`);
+      save.setAttribute("type", "submit");
+      save.setAttribute("aria-label", `Save: ${m.label}`);
+      form.addEventListener("submit", (ev) => {
+        if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
+        const v = String(input.value).trim();
+        if (!v) {
+          err.textContent = "Type the new value first.";
+          err.hidden = false;
+          input.setAttribute("aria-invalid", "true");
+          return;
+        }
+        err.hidden = true;
+        input.removeAttribute("aria-invalid");
+        ctx.act(w.id, "memory.save", { key: m.key, value: v });
+        input.value = "";
+        ctx.top.dirty[key] = { kind: "text", value: "" };
+      });
+      add(form, lab, add(h("div", "genui-memory-row"), input, save), err);
+      add(li, forget, form);
+      add(ul, li);
+    }
+    return add(root, ul);
   };
 
   /* ---- share panel: iCalendar text built locally */

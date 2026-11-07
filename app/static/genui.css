@@ -99,14 +99,93 @@ textarea.genui-input { min-height: 96px; resize: vertical; }
 .genui-badge { display: inline-block; padding: 2px 10px; border: 1px solid var(--g-teal); border-radius: 999px; background: var(--g-teal-tint); color: var(--g-teal-dark); font-size: .8rem; font-weight: 700; }
 .genui-badge-demo { border-color: #8a5a00; background: var(--g-gold-soft); color: #5a3a00; }
 
-/* Task chips: icon + text, not colour alone */
-.genui-chip { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin: 4px 0; padding: 2px 10px; border: 2px solid var(--g-line); border-radius: 999px; font-size: .85rem; font-weight: 700; background: #fff; }
-.genui-chip-icon { font-weight: 900; }
-.genui-chip-running { border-style: dashed; border-color: var(--g-teal); color: var(--g-teal-dark); }
-.genui-chip-completed { border-color: var(--g-teal); background: var(--g-teal-tint); color: var(--g-teal-dark); }
+/* Task board: a status mark with its own shape per state, a text chip, and a calm running shimmer */
+.genui-board-summary { margin: 0 0 10px; color: var(--g-muted); font-size: .95rem; font-weight: 600; }
+.genui-tasks { gap: 10px; }
+.genui-task { position: relative; flex-wrap: wrap; align-items: flex-start; padding: 12px 12px 12px 14px; border-left: 6px solid var(--g-line); overflow: hidden; }
+.genui-task-main { gap: 2px; }
+.genui-task-actions { flex: 1 1 100%; margin: 4px 0 0 46px; }
+.genui-task-mark { flex: 0 0 34px; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: 2px solid var(--g-line); background: #fff; color: var(--g-muted); font-weight: 900; font-size: 1.05rem; line-height: 1; }
+.genui-mark-pending { border-radius: 50%; border-style: dashed; }
+.genui-mark-running { border-radius: 50%; border-color: var(--g-teal-tint); border-top-color: var(--g-teal); color: var(--g-teal-dark); animation: genui-spin 1.4s linear infinite; }
+.genui-mark-waiting_for_input { border-radius: 4px; transform: rotate(45deg); border-color: #8a5a00; background: var(--g-gold-soft); color: #5a3a00; font-size: 0; }
+.genui-mark-waiting_for_input::after { content: "?"; font-size: 1.05rem; transform: rotate(-45deg); }
+.genui-mark-waiting_for_approval { border-radius: 8px 8px 17px 17px; border-color: #8a5a00; background: var(--g-gold-soft); color: #5a3a00; }
+.genui-mark-completed { border-radius: 50%; border-color: var(--g-teal); background: var(--g-teal); color: #fff; }
+.genui-mark-failed { border-radius: 6px; border-color: var(--g-brick); background: var(--g-brick); color: #fff; }
+.genui-mark-cancelled { border-radius: 50%; border-style: dotted; background: transparent; }
+.genui-status-running { border-left-color: var(--g-teal); }
+.genui-status-running::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: linear-gradient(90deg, transparent, var(--g-teal), transparent); background-size: 40% 100%; background-repeat: no-repeat; animation: genui-run 1.8s ease-in-out infinite; }
+@keyframes genui-run { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+.genui-status-completed { border-left-color: var(--g-teal); background: #f6fbf9; }
+.genui-status-failed { border-left-color: var(--g-brick); background: var(--g-brick-tint); }
+.genui-status-waiting_for_input, .genui-status-waiting_for_approval { border-left-color: #8a5a00; background: #fffaf0; }
+.genui-status-cancelled { border-left-style: dotted; color: var(--g-muted); }
+.genui-status-cancelled .genui-item-title { text-decoration: line-through; }
+.genui-chip { display: inline-flex; align-items: center; align-self: flex-start; margin: 2px 0 0; padding: 1px 10px; border: 2px solid var(--g-line); border-radius: 6px; font-size: .82rem; font-weight: 700; background: #fff; }
+.genui-chip-pending { border-radius: 999px; border-style: dashed; }
+.genui-chip-running { border-radius: 999px; border-color: var(--g-teal); color: var(--g-teal-dark); }
+.genui-chip-completed { border-radius: 999px; border-color: var(--g-teal); background: var(--g-teal-tint); color: var(--g-teal-dark); }
 .genui-chip-failed { border-color: var(--g-brick); background: var(--g-brick-tint); color: #6b1f0e; }
 .genui-chip-waiting_for_input, .genui-chip-waiting_for_approval { border-color: #8a5a00; background: var(--g-gold-soft); color: #5a3a00; }
-.genui-chip-cancelled { border-style: dotted; color: var(--g-muted); }
+.genui-chip-waiting_for_approval { border-radius: 10px 10px 16px 16px; }
+.genui-chip-cancelled { border-radius: 999px; border-style: dotted; color: var(--g-muted); }
+
+/* State labels (text + icon) shared by composer, event preview, email tags and planner */
+.genui-state { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border: 2px solid var(--g-line); border-radius: 999px; background: #fff; font-size: .85rem; font-weight: 700; }
+.genui-state-icon { font-weight: 900; }
+.genui-state-draft, .genui-state-copied { border-style: dashed; border-color: #8a5a00; background: var(--g-gold-soft); color: #5a3a00; }
+.genui-state-sent, .genui-state-created { border-color: var(--g-teal); background: var(--g-teal-tint); color: var(--g-teal-dark); }
+.genui-state-failed { border-radius: 6px; border-color: var(--g-brick); background: var(--g-brick-tint); color: #6b1f0e; }
+.genui-state-cancelled { border-style: dotted; color: var(--g-muted); }
+.genui-detail { margin: 0 0 10px; padding: 8px 12px; border-left: 5px solid var(--g-line); border-radius: 8px; background: #fff; font-weight: 600; }
+.genui-composer-failed .genui-detail, .genui-event-failed .genui-detail { border-left-color: var(--g-brick); background: var(--g-brick-tint); }
+.genui-composer-sent .genui-detail, .genui-event-created .genui-detail { border-left-color: var(--g-teal); background: var(--g-teal-tint); }
+.genui-composer-read { margin: 0 0 6px; }
+.genui-composer-body { white-space: pre-wrap; padding: 8px 12px; border-radius: 10px; background: #fff; border: 1px solid var(--g-line); font-weight: 400; }
+.genui-composer-draft, .genui-event-draft { border-left: 5px dashed #8a5a00; padding-left: 10px; }
+.genui-composer-sent, .genui-event-created { border-left: 5px solid var(--g-teal); padding-left: 10px; }
+.genui-composer-failed, .genui-event-failed { border-left: 5px solid var(--g-brick); padding-left: 10px; }
+.genui-composer-copied { border-left: 5px dotted #8a5a00; padding-left: 10px; }
+.genui-event-cancelled { border-left: 5px dotted var(--g-line); padding-left: 10px; color: var(--g-muted); }
+.genui-conflicts { margin: 0 0 12px; padding: 10px 12px; border: 2px solid #8a5a00; border-radius: 12px; background: var(--g-gold-soft); color: #4a3000; }
+.genui-conflicts-title { margin: 0 0 4px; font-weight: 800; }
+.genui-conflict-list { margin: 0; padding-left: 22px; }
+.genui-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 0; }
+.genui-time-chip { padding: 1px 10px; border-radius: 6px; background: var(--g-teal-tint); color: var(--g-teal-dark); font-size: .85rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* Email list */
+.genui-email { align-items: flex-start; }
+.genui-email .genui-grow { flex-basis: 220px; }
+.genui-unread { border-left: 6px solid var(--g-teal); background: #f6fbf9; }
+.genui-email-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px; }
+.genui-email-sender { font-weight: 800; }
+.genui-email-time { color: var(--g-muted); font-size: .85rem; }
+.genui-email-subject { font-weight: 600; }
+.genui-unread .genui-email-subject { font-weight: 800; }
+.genui-tag-unread { border-color: var(--g-teal); background: var(--g-teal-tint); color: var(--g-teal-dark); }
+.genui-tag-important, .genui-tag-high { border-color: #8a5a00; background: var(--g-gold-soft); color: #5a3a00; }
+.genui-tag-reply { border-style: dashed; border-color: var(--g-brick); color: #6b1f0e; }
+
+/* Day planner */
+.genui-plan-item { align-items: flex-start; border-left: 6px solid var(--g-line); }
+.genui-prio-high { border-left-color: #8a5a00; }
+.genui-prio-low { border-left-style: dotted; }
+.genui-plan-main { display: flex; flex: 1 1 200px; min-width: 0; gap: 10px; align-items: flex-start; }
+.genui-plan-controls { flex: 1 1 100%; align-items: center; margin-top: 4px; }
+.genui-plan-prio { display: flex; align-items: center; gap: 6px; }
+.genui-plan-prio-label { font-size: .85rem; font-weight: 700; color: var(--g-muted); }
+.genui-plan-select { width: auto; min-width: 110px; }
+.genui-kind { border-radius: 6px; font-size: .8rem; padding: 0 8px; }
+.genui-plan-add { margin-top: 14px; padding-top: 12px; border-top: 2px dashed var(--g-line); }
+
+/* Memory */
+.genui-consent { margin: 0 0 10px; padding: 10px 12px; border-left: 5px solid var(--g-teal); border-radius: 8px; background: var(--g-teal-tint); color: var(--g-teal-dark); font-weight: 600; }
+.genui-memory-item { align-items: flex-start; }
+.genui-memory-label { font-weight: 700; }
+.genui-memory-form { flex: 1 1 100%; }
+.genui-memory-row { display: flex; gap: 8px; }
+.genui-memory-row .genui-input { flex: 1 1 0; min-width: 0; }
 
 /* Progress */
 .genui-progress-label { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 6px; font-weight: 600; }
@@ -171,11 +250,16 @@ textarea.genui-input { min-height: 96px; resize: vertical; }
 @media (max-width: 420px) {
   .genui-widget { padding: 12px; border-radius: 14px; }
   .genui-actions .genui-btn { flex: 1 1 100%; }
+  .genui-task-actions { margin-left: 0; }
+  .genui-actions.genui-task-actions .genui-btn, .genui-actions.genui-plan-controls .genui-btn, .genui-email .genui-actions .genui-btn { flex: 1 1 40%; }
+  .genui-actions .genui-plan-prio, .genui-actions .genui-memory-row { flex: 1 1 100%; }
   .genui-actions .genui-qty-btn { flex: 0 0 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   .genui-enter { animation: none; }
   .genui-spinner { animation: none; border-top-color: var(--g-teal); border-right-color: var(--g-teal); }
+  .genui-mark-running { animation: none; border-right-color: var(--g-teal); }
+  .genui-status-running::after { animation: none; background-position: 50% 0; }
   .genui-btn { transition: none; }
   .genui-btn:active:not(:disabled) { transform: none; }
 }

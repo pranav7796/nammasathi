@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 from playwright.sync_api import sync_playwright
 
@@ -32,7 +33,24 @@ COMPONENTS = {
     "note_list",
     "status",
     "share_panel",
+    "email_list",
+    "event_preview",
+    "day_planner",
+    "memory_list",
 }
+NEW_WIDGETS = (
+    "tasks1",
+    "emails1",
+    "event.e1",
+    "event.e2",
+    "event.e3",
+    "planner1",
+    "memory1",
+    "comp1",
+    "comp2",
+    "comp3",
+    "comp4",
+)
 failures: list[str] = []
 
 
@@ -73,6 +91,11 @@ def run(out_dir: Path) -> None:
                 f"{width}px: all components rendered (missing {sorted(COMPONENTS - types)})",
             )
 
+            for wid in NEW_WIDGETS:
+                page.locator(f'[data-genui-id="{wid}"]').screenshot(
+                    path=str(out_dir / f"genui_{width}_{wid.replace('.', '_')}.png")
+                )
+
             overflow = page.evaluate(
                 "document.documentElement.scrollWidth - document.documentElement.clientWidth"
             )
@@ -100,7 +123,7 @@ def run(out_dir: Path) -> None:
             page.evaluate(
                 "document.activeElement && document.activeElement.blur(); window.scrollTo(0,0)"
             )
-            for _ in range(wanted + 5):
+            for _ in range(wanted * 2 + 10):  # date and time inputs have several tab stops each:
                 page.keyboard.press("Tab")
                 seen.add(
                     page.evaluate(
@@ -147,6 +170,116 @@ def run(out_dir: Path) -> None:
                 a for a in page.evaluate("window.actions") if a["actionId"] == "order.confirm"
             ]
             check(len(confirms) == 1, f"{width}px: double click confirms once ({len(confirms)})")
+
+            def posted(action_id: str, page: Any = page) -> list[dict[str, Any]]:
+                return [a for a in page.evaluate("window.actions") if a["actionId"] == action_id]
+
+            # Task board: approve fires once and rests; view and edit post their ids.
+            page.evaluate("window.actions.length = 0")
+            page.dblclick('[data-key="approve:k4"]')
+            page.click('[data-key="view:k4"]')
+            page.click('[data-key="edit:k4"]')
+            check(
+                len(posted("task.approve:k4")) == 1
+                and posted("task.approve:k4")[0]["values"] == {"task_id": "k4"}
+                and len(posted("task.view:k4")) == 1
+                and len(posted("task.edit:k4")) == 1,
+                f"{width}px: task approve/view/edit post once ({page.evaluate('window.actions')})",
+            )
+            check(
+                page.is_disabled('[data-key="approve:k4"]'),
+                f"{width}px: Approve rests after one click",
+            )
+
+            # Email list.
+            page.evaluate("window.actions.length = 0")
+            page.click('[data-key="open:18c3F_a1"]')
+            page.click('[data-key="reply:18c3F_a1"]')
+            check(
+                len(posted("email.open:18c3F_a1")) == 1
+                and len(posted("email.reply:18c3F_a1")) == 1,
+                f"{width}px: email open and reply post their ids",
+            )
+            check(
+                "min ago" in page.inner_text('[data-genui-id="emails1"]')
+                and "Unread" in page.inner_text('[data-genui-id="emails1"]'),
+                f"{width}px: emails show relative time and text chips",
+            )
+
+            # Event preview: edit then approve posts the edited values once.
+            page.evaluate("window.actions.length = 0")
+            page.fill('[data-genui-id="event.e1"] [name="title"]', "Dinner at Toit")
+            page.fill('[data-genui-id="event.e1"] [name="minutes"]', "120")
+            page.fill(
+                '[data-genui-id="event.e1"] [name="attendees"]',
+                "asha@example.com\n\nkiran@example.com\n",
+            )
+            page.dblclick('[data-genui-id="event.e1"] [data-key="approve"]')
+            ev = posted("task.approve:e1")
+            check(
+                len(ev) == 1
+                and ev[0]["values"]
+                == {
+                    "title": "Dinner at Toit",
+                    "date": "2026-11-09",
+                    "start": "19:30",
+                    "minutes": 120,
+                    "attendees": ["asha@example.com", "kiran@example.com"],
+                },
+                f"{width}px: event approve posts edited values {ev}",
+            )
+            check(
+                page.locator('[data-genui-id="event.e2"] input').count() == 0,
+                f"{width}px: created event is read-only",
+            )
+
+            # Day planner.
+            page.evaluate("window.actions.length = 0")
+            page.click('[data-key="toggle:p2"]')
+            page.select_option('[data-key="priority:p3"]', "high")
+            page.click('[data-key="down:p2"]')
+            page.fill('[data-genui-id="planner1"] [name="title"]', "Call Ajji")
+            page.fill('[data-genui-id="planner1"] [name="time"]', "18:00")
+            page.click('[data-genui-id="planner1"] [data-key="add"]')
+            check(
+                posted("plan.toggle:p2")
+                and posted("plan.priority:p3")[0]["values"] == {"priority": "high"}
+                and posted("plan.move:p2")[0]["values"] == {"direction": "down"}
+                and posted("plan.add")[0]["values"] == {"title": "Call Ajji", "time": "18:00"},
+                f"{width}px: planner actions {page.evaluate('window.actions')}",
+            )
+
+            # Memory.
+            page.evaluate("window.actions.length = 0")
+            page.fill('[name="value_diet"]', "Eggetarian")
+            page.click('[data-key="save:diet"]')
+            page.click('[data-key="forget:home_area"]')
+            check(
+                posted("memory.save")[0]["values"] == {"key": "diet", "value": "Eggetarian"}
+                and len(posted("memory.forget:home_area")) == 1,
+                f"{width}px: memory save and forget {page.evaluate('window.actions')}",
+            )
+
+            # Composer: Send fires once; states carry text.
+            page.evaluate("window.actions.length = 0")
+            page.fill('[data-genui-id="comp1"] [name="body"]', "Edited body")
+            page.dblclick('[data-genui-id="comp1"] [data-key="send"]')
+            sent = posted("task.approve:c1")
+            check(
+                len(sent) == 1 and sent[0]["values"]["body"] == "Edited body",
+                f"{width}px: composer Send fires once with edited values",
+            )
+            texts = {
+                wid: page.inner_text(f'[data-genui-id="{wid}"]')
+                for wid in ("comp2", "comp3", "comp4")
+            }
+            check(
+                "Sent" in texts["comp2"]
+                and "Delivered to Gmail" in texts["comp2"]
+                and "Copied, not sent" in texts["comp3"]
+                and "Failed" in texts["comp4"],
+                f"{width}px: composer states carry text",
+            )
 
             # Form: invalid then valid submit.
             page.click('[data-key="submit"]')

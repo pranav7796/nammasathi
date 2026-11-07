@@ -57,3 +57,48 @@ what an `action_id` does is decided server-side.
 Plain DOM, `textContent` only, no `innerHTML`. Keyboard operable, labelled controls, visible focus,
 `aria-live="polite"` for a task board and status. Works at 360px wide. Respects
 `prefers-reduced-motion`. The page's existing look (CSS variables in `style.css`) is reused.
+
+---
+
+# Addendum: widgets for Gmail, Calendar, WhatsApp, planning and memory
+
+Same rules as above (plain text only, `textContent`, closed registry, server builds, ids are stable and
+a widget with an existing id is replaced in place). All of these carry `demo: bool`, **required**, so a
+simulated result can never look real: a demo widget shows a clear "Demo" badge and its text never says
+"sent", "booked" or "created" for a demo (the server writes the words; the renderer shows them).
+
+## Changed
+
+- `task_board` task gains `approve_action_id?`, `view_action_id?`, `edit_action_id?` (all optional, each
+  must be a known action id, usually `task.approve:<task id>`, `task.view:<task id>`, `task.edit:<task id>`).
+  The board gains `demo: bool` (default false) and optional `summary` text. A task in
+  `waiting_for_approval` shows an **Approve** button when `approve_action_id` is present. Retry shows for
+  `failed`, cancel for `pending`, `running`, `waiting_for_input`, `waiting_for_approval`.
+- `composer` gains `state: "draft"|"sent"|"copied"|"failed"` (required), `detail?` (what the service
+  reported, such as "delivered" or an error), `demo: bool` (required), `editable: bool`. Draft shows a
+  **Send** button that posts the edited values with the `send` action. The three states must look
+  different and carry text, not colour alone: "Draft, not sent", "Copied, not sent", "Sent" (with the
+  service's own status in `detail`), "Failed". `send.action_id` is `task.approve:<task id>`; editing posts
+  `task.edit:<task id>` with the edited `to`, `subject`, `body`.
+
+## New components
+
+| type | properties (besides `id`) |
+|---|---|
+| `email_list` | `title`, `items`: `{id, sender, subject, snippet, received: ISO-8601, unread: bool, important: bool, needs_reply: bool}`[] (at most 10), `empty_text`, `demo`. Per item the browser derives actions `email.open:<id>` and `email.reply:<id>` (ids match `^[A-Za-z0-9_\-]{1,100}$`). |
+| `event_preview` | `title`, `fields`: `{title, date: "YYYY-MM-DD", start: "HH:MM", minutes: int, attendees: str[]}`, `conflicts`: `{title, start: "HH:MM", end: "HH:MM"}`[], `state`: `draft`\|`created`\|`failed`\|`cancelled`, `detail?`, `demo`, `editable`. Draft shows an editable form (title, date, time, minutes, attendees one per line), **Approve** (`task.approve:<task id>` is given as `approve.action_id`) and **Cancel**. Conflicts are shown in a warning block. |
+| `day_planner` | `title`, `date: "YYYY-MM-DD"`, `items`: `{id, kind: "event"\|"reminder"\|"email"\|"task", title, time: "HH:MM"\|null, done: bool, priority: "low"\|"normal"\|"high", detail?}`[] (at most 40), `demo`, `editable`. The browser derives `plan.toggle:<id>`, `plan.priority:<id>` (values `{priority}`), `plan.move:<id>` (values `{direction: "up"\|"down"}`), and a small add form posting `plan.add` with `{title, time?}`. Reordering uses real up/down buttons (keyboard operable), not drag only. |
+| `memory_list` | `title`, `items`: `{key, label, value}`[], `empty_text`, `consent_text` (what is kept and why). Per item the browser derives `memory.forget:<key>` and an edit form posting `memory.save` with `{key, value}`. |
+
+New action ids to register: `task.approve`, `task.edit`, `task.view`, `email.open`, `email.reply`,
+`plan.toggle`, `plan.priority`, `plan.move`, `plan.add`, `memory.forget`, `memory.save`, `demo.next`.
+
+## Server builders (names the engine uses)
+
+`email_list_widget(items, *, title, demo)`, `event_preview_widget(task_id, *, fields, conflicts, state,
+detail, demo, editable)`, `day_planner_widget(*, date, items, demo, editable)`,
+`memory_list_widget(items, *, consent_text)`, `calendar_view_widget(days, *, title, demo)`,
+`composer_widget(task_id, *, channel, to, subject, body, state, detail, demo, editable)`,
+`task_board_widget(tasks, *, demo, summary)` (extend `TaskInput` with `approvable`, `viewable`, `editable`
+booleans, which produce the optional action ids with `task.<verb>:<task id>`). Input dataclasses are
+frozen and defined in `builders.py` beside the existing ones.

@@ -67,6 +67,28 @@ class Settings:
     smtp_password: str | None = field(default=None, repr=False)
     smtp_from: str = ""
     support_email: str = ""
+    # Gmail and Google Calendar (OAuth, "Testing" mode is free) and WhatsApp Cloud API. Empty means
+    # not configured: those features then offer a labelled demo, never a pretend success.
+    google_client_id: str = ""
+    google_client_secret: str | None = field(default=None, repr=False)
+    whatsapp_access_token: str | None = field(default=None, repr=False)
+    whatsapp_phone_number_id: str = ""
+    whatsapp_app_secret: str | None = field(default=None, repr=False)
+    whatsapp_verify_token: str | None = field(default=None, repr=False)
+    whatsapp_graph_version: str = "v21.0"
+
+    @property
+    def google_configured(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret and self.public_base_url)
+
+    @property
+    def whatsapp_configured(self) -> bool:
+        return bool(
+            self.whatsapp_access_token
+            and self.whatsapp_phone_number_id
+            and self.whatsapp_app_secret
+            and self.whatsapp_verify_token
+        )
 
     @property
     def accounts_enabled(self) -> bool:
@@ -222,6 +244,13 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         smtp_password=values.get("SMTP_PASSWORD") or None,
         smtp_from=smtp_from,
         support_email=values.get("SUPPORT_EMAIL", "").strip(),
+        google_client_id=values.get("GOOGLE_CLIENT_ID", "").strip(),
+        google_client_secret=values.get("GOOGLE_CLIENT_SECRET") or None,
+        whatsapp_access_token=values.get("WHATSAPP_ACCESS_TOKEN") or None,
+        whatsapp_phone_number_id=values.get("WHATSAPP_PHONE_NUMBER_ID", "").strip(),
+        whatsapp_app_secret=values.get("WHATSAPP_APP_SECRET") or None,
+        whatsapp_verify_token=values.get("WHATSAPP_VERIFY_TOKEN") or None,
+        whatsapp_graph_version=values.get("WHATSAPP_GRAPH_VERSION", "v21.0").strip() or "v21.0",
         llm_primary=llm_primary,
         llm_timeout_seconds=llm_timeout,
         demo_understanding=demo_understanding,

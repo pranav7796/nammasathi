@@ -63,8 +63,11 @@ from app.dining.workflow import DiningWorkflow
 from app.genui.builders import CalendarInput, share_panel_widget
 from app.genui.models import Widget
 from app.genui.validate import GenUIError, to_wire
+from app.google.oauth import ConnectionStore, GoogleOAuth
+from app.google.routes import google_router
 from app.llm.chain import SCRIPTED, build_extractor
 from app.llm.extractor import IntentExtractionError
+from app.memory.routes import memory_router
 from app.oauth_web import callback_url, oauth_router
 from app.observability import configure_logging, log_event
 from app.orchestrator.state_machine import Money, Say
@@ -74,6 +77,13 @@ from app.personal.dates import IST
 from app.personal.routes import personal_router
 from app.personal.service import PersonalService, WriteLimited
 from app.personal.store import PersonalError
+from app.tasks import turn as task_turn
+from app.tasks.engine import TaskEngine
+from app.tasks.llm_planner import LlmPlanExtractor
+from app.tasks.planner import PlanExtractor
+from app.tasks.routes import tasks_router
+from app.tasks.services import ServiceHub
+from app.tasks.store import TaskStore
 from app.timing import TurnTimer, begin_turn, stage
 from app.voice.gnani import (
     DEFAULT_VOICES,
@@ -84,6 +94,7 @@ from app.voice.gnani import (
 )
 from app.voice.presentation import response_text, speech_error_text
 from app.waitlist import waitlist_router
+from app.whatsapp.routes import whatsapp_router
 
 MAX_AUDIO_BYTES = 12 * 1024 * 1024
 MAX_TYPED_CHARACTERS = 400
@@ -232,9 +243,32 @@ def create_app(
         )
         application.state.accounts = service
         application.state.close_user_conversations = close_user_conversations
+        application.state.google = None
+        application.state.tasks = None
+        engine: TaskEngine | None = None
+        application.state.plan_extractor = None
+        if service is not None:
+            google = GoogleOAuth(runtime_settings, ConnectionStore(service))
+            application.state.google = google
+            engine = TaskEngine(
+                TaskStore(service.database),
+                ServiceHub(service, google).for_user,
+                run_blocking=service.run,
+            )
+            try:
+                await engine.start()
+            except AccountsUnavailable:
+                log_event("tasks", op="recover", outcome="database_unavailable")
+            application.state.tasks = engine
+            if runtime_settings.demo_understanding == "llm" and (
+                runtime_settings.groq_api_key or runtime_settings.gemini_api_key
+            ):
+                application.state.plan_extractor = LlmPlanExtractor(runtime_settings)
         log_event("app_started", mode=runtime_settings.commerce_backend)
         yield
         sessions.clear()
+        if engine is not None:
+            await engine.close()
         if service is not None:
             await service.close()
         for client in (shared_adapter, shared_dining, *shared_food.values()):
@@ -255,6 +289,10 @@ def create_app(
     application.include_router(account_router())
     application.include_router(waitlist_router())
     application.include_router(personal_router())
+    application.include_router(google_router())
+    application.include_router(whatsapp_router())
+    application.include_router(memory_router())
+    application.include_router(tasks_router())
 
     async def close_user_conversations(user_id: str) -> None:
         """After sign-out, disconnect, or deletion nothing of this user's may keep running."""
@@ -466,6 +504,33 @@ def create_app(
         text: str,
     ) -> dict[str, object]:
         runtime_settings = entry.settings
+        engine = cast(TaskEngine | None, request.app.state.tasks)
+        if engine is not None:
+            planned = await task_turn.handle(
+                engine,
+                entry.owner,
+                entry.language,
+                text,
+                cast(PlanExtractor | None, request.app.state.plan_extractor),
+                order_busy=entry.assistant.view().state == "READBACK",
+            )
+            if planned is not None:
+                return await _response_payload(
+                    entry,
+                    None,
+                    runtime_settings,
+                    tts_factory,
+                    session_id=session_id,
+                    transcript=text,
+                    timer=timer,
+                    message_override=planned.message,
+                    ui=planned.widgets,
+                    plan=(
+                        {"id": planned.plan_id, "active": planned.active}
+                        if planned.plan_id
+                        else None
+                    ),
+                )
         spoken_reminder = await reminder_turn(request, entry, text)
         if spoken_reminder is not None:
             message, widgets = spoken_reminder
@@ -1086,6 +1151,7 @@ async def _response_payload(
     timer: TurnTimer | None = None,
     message_override: str | None = None,
     ui: list[Widget] | None = None,
+    plan: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """`message_override` and `ui` serve turns the ordering assistant did not handle."""
     if message_override is not None:
@@ -1127,6 +1193,8 @@ async def _response_payload(
             "audio_error": audio_error,
         }
     )
+    if plan is not None:
+        result["plan"] = plan
     if ui is None and reply is not None:
         ui = _share_widgets(entry, settings)
     if ui:

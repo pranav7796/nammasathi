@@ -445,7 +445,7 @@ test("copy uses the clipboard and fails gracefully", async () => {
 test("composer sends edited values and copies when enabled", async () => {
   const copied = [];
   const e = makeEnv({ clipboard: { writeText: (t) => { copied.push(t); return Promise.resolve(); } } });
-  e.api.render(e.container, [{ id: "c", type: "composer", channel: "email", to: "a@b.c", subject: "Hi", body: "Body", send: action("Send", "compose.send", "primary"), copy_enabled: true }], { onAction: e.onAction });
+  e.api.render(e.container, [{ id: "c", type: "composer", channel: "email", to: "a@b.c", subject: "Hi", body: "Body", send: action("Send", "compose.send", "primary"), copy_enabled: true, state: "draft", demo: false }], { onAction: e.onAction });
   e.container.querySelector('[name="body"]').type("Edited body");
   e.container.querySelector('[data-key="send"]').click();
   assert.deepEqual(e.actions.pop(), { widgetId: "c", actionId: "compose.send", values: { to: "a@b.c", subject: "Hi", body: "Edited body" } });
@@ -513,4 +513,391 @@ test("a throwing onAction never breaks the page", () => {
   const e = makeEnv();
   e.api.render(e.container, [{ id: "ap", type: "action_panel", title: "P", actions: [action("Go", "p.go")] }], { onAction: () => { throw new Error("boom"); } });
   assert.doesNotThrow(() => e.container.querySelector("button").click());
+});
+
+/* ---- addendum: Gmail, Calendar, WhatsApp, planning and memory ------------------ */
+const ISO_NOW = (offsetMs) => new Date(Date.now() - offsetMs).toISOString();
+function emailList(over = {}) {
+  return {
+    id: "emails", type: "email_list", title: "Emails", empty_text: "No emails.", demo: true,
+    items: [
+      { id: "18c3F_a-1", sender: "Rahul", subject: "Meet tomorrow?", snippet: "Hi, can we meet", received: ISO_NOW(25 * 60000), unread: true, important: true, needs_reply: true },
+      { id: "m2", sender: "Asha", subject: "Old news", snippet: "", received: ISO_NOW(3 * 86400000), unread: false, important: false, needs_reply: false },
+    ],
+    ...over,
+  };
+}
+function eventPreview(over = {}) {
+  return {
+    id: "event.t1", type: "event_preview", title: "New event", state: "draft", demo: false, editable: true,
+    fields: { title: "Dinner", date: "2026-11-09", start: "19:30", minutes: 90, attendees: ["a@x.io", "b@x.io"] },
+    conflicts: [{ title: "Standup", start: "19:00", end: "20:00" }],
+    approve: action("Approve", "task.approve:t1", "primary"), cancel: action("Cancel", "task.cancel:t1"), ...over,
+  };
+}
+function planner(over = {}) {
+  return {
+    id: "planner", type: "day_planner", title: "Your day", date: "2026-11-09", demo: false, editable: true,
+    items: [
+      { id: "p1", kind: "event", title: "Standup", time: "10:00", done: false, priority: "normal" },
+      { id: "p2", kind: "email", title: "Reply to Rahul", done: true, priority: "high" },
+      { id: "p3", kind: "task", title: "Pay", done: false, priority: "low", detail: "Before 5" },
+    ],
+    ...over,
+  };
+}
+function memory(over = {}) {
+  return {
+    id: "memory", type: "memory_list", title: "What I remember", empty_text: "Nothing yet.", consent_text: "Kept only to help you.",
+    items: [{ key: "diet", label: "Diet", value: "vegetarian" }, { key: "home", label: "Home", value: "Indiranagar" }], ...over,
+  };
+}
+function composer(over = {}) {
+  return {
+    id: "composer.t7", type: "composer", channel: "email", to: "a@b.c", subject: "Hi", body: "Body\nline two", state: "draft", demo: false, editable: true,
+    send: action("Send", "task.approve:t7", "primary"), copy_enabled: true, ...over,
+  };
+}
+const within = (e, id) => e.container.children.find((c) => idOf(c) === id);
+
+test("new components validate: demo is required, limits and ids hold", () => {
+  const e = makeEnv();
+  const v = (w) => e.api.validate(w).ok;
+  for (const make of [emailList, eventPreview, planner, composer]) {
+    assert.equal(v(make()), true);
+    const noDemo = make();
+    delete noDemo.demo;
+    assert.equal(v(noDemo), false, `${noDemo.type} needs demo`);
+  }
+  assert.equal(v(memory()), true);
+  const mail = (n) => emailList({ items: Array.from({ length: n }, (_, i) => ({ ...emailList().items[0], id: `m${i}` })) });
+  assert.equal(v(mail(10)), true);
+  assert.equal(v(mail(11)), false);
+  assert.equal(v(emailList({ items: [{ ...emailList().items[0], id: "a b" }] })), false);
+  assert.equal(v(emailList({ items: [{ ...emailList().items[0], id: "x".repeat(101) }] })), false);
+  assert.equal(v(emailList({ items: [emailList().items[0], emailList().items[0]] })), false, "duplicate ids");
+  assert.equal(v(emailList({ items: [{ ...emailList().items[0], unread: "yes" }] })), false);
+  const ev = (f) => eventPreview({ fields: { ...eventPreview().fields, ...f } });
+  assert.equal(v(ev({ attendees: Array(10).fill("a") })), true);
+  assert.equal(v(ev({ attendees: Array(11).fill("a") })), false);
+  assert.equal(v(ev({ date: "2026-13-45" })), false);
+  assert.equal(v(ev({ start: "25:00" })), false);
+  assert.equal(v(ev({ minutes: 0 })), false);
+  assert.equal(v(ev({ minutes: 1.5 })), false);
+  assert.equal(v(eventPreview({ conflicts: Array(11).fill({ title: "x", start: "10:00", end: "11:00" }) })), false);
+  assert.equal(v(eventPreview({ state: "sent" })), false);
+  const items = (n) => planner({ items: Array.from({ length: n }, (_, i) => ({ id: `i${i}`, kind: "task", title: "t", done: false, priority: "normal" })) });
+  assert.equal(v(items(40)), true);
+  assert.equal(v(items(41)), false);
+  assert.equal(v(planner({ items: [{ ...planner().items[0], id: "A:b" }] })), false);
+  assert.equal(v(planner({ items: [{ ...planner().items[0], kind: "meeting" }] })), false);
+  assert.equal(v(planner({ items: [{ ...planner().items[0], time: "7pm" }] })), false);
+  assert.equal(v(planner({ date: "2026-02-30" })), false);
+  const mem = (n) => memory({ items: Array.from({ length: n }, (_, i) => ({ key: `k${i}`, label: "l", value: "v" })) });
+  assert.equal(v(mem(30)), true);
+  assert.equal(v(mem(31)), false);
+  assert.equal(v(memory({ items: [{ key: "Bad Key", label: "l", value: "v" }] })), false);
+  assert.equal(v(memory({ demo: true })), false, "memory_list has no demo property");
+  assert.equal(v(composer({ state: "queued" })), false);
+  assert.equal(v({ id: "c", type: "calendar_view", title: "t", days: [], demo: true }), true);
+  assert.equal(v({ id: "c", type: "calendar_view", title: "t", days: [] }), true);
+  assert.equal(v({ id: "t", type: "task_board", title: "t", tasks: [], demo: true, summary: "s" }), true);
+});
+
+test("email_list renders cards with text chips and posts email.open and email.reply", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [emailList()], { onAction: e.onAction });
+  const text = e.container.textContent;
+  assert.match(text, /Rahul/);
+  assert.match(text, /Meet tomorrow\?/);
+  assert.match(text, /25 min ago/);
+  assert.match(text, /3 days ago/);
+  assert.match(text, /Unread/);
+  assert.match(text, /Important/);
+  assert.match(text, /Needs reply/);
+  assert.match(text, /Demo/);
+  assert.equal(e.container.querySelectorAll("li").length, 2);
+  e.container.querySelector('[data-key="open:18c3F_a-1"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "emails", actionId: "email.open:18c3F_a-1", values: {} });
+  e.container.querySelector('[data-key="reply:m2"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "emails", actionId: "email.reply:m2", values: {} });
+  e.api.render(e.container, [emailList({ items: [], demo: false })], { onAction: e.onAction });
+  assert.equal(e.container.children.length, 1);
+  assert.match(e.container.textContent, /No emails\./);
+  assert.doesNotMatch(e.container.textContent, /Demo/);
+});
+
+test("email text from outside stays text", () => {
+  const e = makeEnv();
+  const hostile = { ...emailList().items[0], sender: "<img src=x onerror=alert(1)>", subject: "<script>alert(1)</script>" };
+  e.api.render(e.container, [emailList({ items: [hostile] })], {});
+  assert.match(e.container.textContent, /<script>alert\(1\)<\/script>/);
+  assert.equal(e.container.querySelectorAll("script").length, 0);
+  assert.equal(e.container.querySelectorAll("img").length, 0);
+});
+
+test("event_preview posts the edited values with the approve action, once", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [eventPreview()], { onAction: e.onAction });
+  const root = within(e, "event.t1");
+  assert.match(root.textContent, /Draft, not created/);
+  assert.match(root.textContent, /Standup, 19:00–20:00/);
+  const q = (n) => root.querySelector(`[name="${n}"]`);
+  assert.equal(q("title").value, "Dinner");
+  assert.equal(q("attendees").value, "a@x.io\nb@x.io");
+  q("title").type("Dinner at Toit");
+  q("date").type("2026-11-10");
+  q("start").type("20:00");
+  q("minutes").type("120");
+  q("attendees").type("a@x.io\n\n  c@x.io  \n");
+  const approve = root.querySelector('[data-key="approve"]');
+  approve.click();
+  approve.click();
+  assert.equal(e.actions.length, 1);
+  assert.deepEqual(e.actions[0], {
+    widgetId: "event.t1", actionId: "task.approve:t1",
+    values: { title: "Dinner at Toit", date: "2026-11-10", start: "20:00", minutes: 120, attendees: ["a@x.io", "c@x.io"] },
+  });
+  assert.equal(root.querySelector('[data-key="cancel"]').disabled, true, "both rest until replaced");
+});
+
+test("event_preview refuses to post invalid values and cancel posts the cancel action", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [eventPreview({ conflicts: [] })], { onAction: e.onAction });
+  const root = within(e, "event.t1");
+  assert.doesNotMatch(root.textContent, /overlaps/);
+  const q = (n) => root.querySelector(`[name="${n}"]`);
+  q("title").type("   ");
+  q("minutes").type("2.5");
+  q("attendees").type(Array.from({ length: 11 }, (_, i) => `p${i}`).join("\n"));
+  root.querySelector('[data-key="approve"]').click();
+  assert.equal(e.actions.length, 0);
+  assert.equal(q("title").getAttribute("aria-invalid"), "true");
+  assert.equal(q("minutes").getAttribute("aria-invalid"), "true");
+  assert.equal(q("attendees").getAttribute("aria-invalid"), "true");
+  assert.equal(root.querySelector('[data-key="approve"]').disabled, false);
+  root.querySelector('[data-key="cancel"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "event.t1", actionId: "task.cancel:t1", values: {} });
+});
+
+test("event_preview after created, failed or cancelled is read-only and shows detail", () => {
+  const e = makeEnv();
+  for (const [state, text, detail] of [["created", /Created/, "Added to your calendar"], ["failed", /Failed/, "Calendar refused"], ["cancelled", /Cancelled/, "You cancelled"]]) {
+    e.api.render(e.container, [eventPreview({ state, detail })], { onAction: e.onAction });
+    const root = within(e, "event.t1");
+    assert.equal(root.querySelectorAll("input").length, 0);
+    assert.equal(root.querySelectorAll("textarea").length, 0);
+    assert.equal(root.querySelectorAll("button").length, 0);
+    assert.match(root.textContent, text);
+    assert.match(root.textContent, new RegExp(detail));
+    assert.match(root.textContent, /Dinner/);
+  }
+  assert.equal(e.container.children.length, 1, "replaced in place by id");
+  e.api.render(e.container, [eventPreview({ state: "created", demo: true })], {});
+  assert.match(e.container.textContent, /Demo/);
+  assert.match(e.container.textContent, /not really created/);
+  assert.doesNotMatch(e.container.textContent.replace(/not really created/, ""), /\bCreated\b/);
+});
+
+test("event_preview keeps typed text and focus when the server replaces it", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [eventPreview()], { onAction: e.onAction });
+  const title = within(e, "event.t1").querySelector('[name="title"]');
+  title.type("My edit");
+  title.focus();
+  e.api.render(e.container, [eventPreview({ detail: "Checked your calendar", conflicts: [] })], { onAction: e.onAction });
+  const again = within(e, "event.t1").querySelector('[name="title"]');
+  assert.notEqual(again, title);
+  assert.equal(again.value, "My edit");
+  assert.equal(e.doc.activeElement, again);
+});
+
+test("day_planner posts toggle, priority, move and add with the contract values", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [planner()], { onAction: e.onAction });
+  const root = within(e, "planner");
+  assert.match(root.textContent, /1 of 3 done/);
+  assert.match(root.textContent, /Event/);
+  assert.match(root.textContent, /Email/);
+  assert.match(root.textContent, /Task/);
+  assert.match(root.textContent, /10:00/);
+  assert.match(root.textContent, /High priority/);
+  const cb = root.querySelector('[data-key="toggle:p1"]');
+  cb.checked = true;
+  cb.dispatch("change");
+  assert.deepEqual(e.actions.pop(), { widgetId: "planner", actionId: "plan.toggle:p1", values: {} });
+  const sel = root.querySelector('[data-key="priority:p1"]');
+  sel.value = "high";
+  sel.dispatch("change");
+  assert.deepEqual(e.actions.pop(), { widgetId: "planner", actionId: "plan.priority:p1", values: { priority: "high" } });
+  root.querySelector('[data-key="down:p1"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "planner", actionId: "plan.move:p1", values: { direction: "down" } });
+  root.querySelector('[data-key="up:p2"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "planner", actionId: "plan.move:p2", values: { direction: "up" } });
+  assert.equal(root.querySelector('[data-key="up:p1"]').disabled, true, "first item cannot move up");
+  assert.equal(root.querySelector('[data-key="down:p3"]').disabled, true, "last item cannot move down");
+  root.querySelector('[data-key="up:p1"]').click();
+  root.querySelector('[data-key="down:p3"]').click();
+  assert.equal(e.actions.length, 0);
+});
+
+test("day_planner add form validates, omits an empty time and clears after posting", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [planner()], { onAction: e.onAction });
+  const root = within(e, "planner");
+  const add = root.querySelector('[data-key="add"]');
+  add.click();
+  assert.equal(e.actions.length, 0, "empty title is refused");
+  const title = root.querySelector('[name="title"]');
+  assert.equal(title.getAttribute("aria-invalid"), "true");
+  title.type("  Call Ajji ");
+  add.click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "planner", actionId: "plan.add", values: { title: "Call Ajji" } });
+  assert.equal(title.value, "");
+  title.type("Lunch");
+  root.querySelector('[name="time"]').type("13:00");
+  add.click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "planner", actionId: "plan.add", values: { title: "Lunch", time: "13:00" } });
+  title.type("half typed");
+  e.api.render(e.container, [planner({ items: [] })], { onAction: e.onAction });
+  assert.equal(within(e, "planner").querySelector('[name="title"]').value, "half typed", "typed text survives replace");
+  assert.match(within(e, "planner").textContent, /Nothing planned yet/);
+});
+
+test("day_planner read-only has no controls and says done or to do in text", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [planner({ editable: false, demo: true })], { onAction: e.onAction });
+  const root = within(e, "planner");
+  assert.equal(root.querySelectorAll("button").length, 0);
+  assert.equal(root.querySelectorAll("input").length, 0);
+  assert.match(root.textContent, /Done/);
+  assert.match(root.textContent, /To do/);
+  assert.match(root.textContent, /Demo/);
+});
+
+test("memory_list shows consent, forgets by key and saves new values", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [memory()], { onAction: e.onAction });
+  const root = within(e, "memory");
+  assert.match(root.textContent, /Kept only to help you\./);
+  assert.match(root.textContent, /vegetarian/);
+  root.querySelector('[data-key="forget:diet"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "memory", actionId: "memory.forget:diet", values: {} });
+  assert.equal(root.querySelector('[data-key="forget:diet"]').disabled, true, "forget rests until replaced");
+  const input = root.querySelector('[name="value_home"]');
+  root.querySelector('[data-key="save:home"]').click();
+  assert.equal(e.actions.length, 0, "empty value is refused");
+  assert.equal(input.getAttribute("aria-invalid"), "true");
+  input.type(" Koramangala ");
+  root.querySelector('[data-key="save:home"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "memory", actionId: "memory.save", values: { key: "home", value: "Koramangala" } });
+  assert.equal(input.value, "");
+  e.api.render(e.container, [memory({ items: [] })], {});
+  assert.match(e.container.textContent, /Nothing yet/);
+  assert.match(e.container.textContent, /Kept only to help you/);
+});
+
+test("task_board approve, view and edit post their ids; approve fires once", () => {
+  const e = makeEnv();
+  const board = (over = {}) => ({
+    id: "tasks", type: "task_board", title: "Tasks", demo: true, summary: "1 needs you", tasks: [
+      { id: "a1", title: "Email Asha", status: "waiting_for_approval", approve_action_id: "task.approve:a1", view_action_id: "task.view:a1", edit_action_id: "task.edit:a1", cancel_action_id: "task.cancel:a1" },
+      { id: "a2", title: "Running", status: "running", approve_action_id: "task.approve:a2", view_action_id: "task.view:a2" },
+      { id: "a3", title: "No ids", status: "waiting_for_approval" },
+    ], ...over,
+  });
+  e.api.render(e.container, [board()], { onAction: e.onAction });
+  const root = e.container;
+  assert.deepEqual(root.querySelectorAll("button").map((b) => b.getAttribute("data-key")), ["approve:a1", "view:a1", "edit:a1", "cancel:a1", "view:a2"]);
+  assert.match(root.textContent, /Demo/);
+  assert.match(root.textContent, /1 needs you/);
+  assert.match(root.textContent, /Needs your approval/);
+  assert.match(root.textContent, /Running/);
+  assert.equal(root.children[0].children[0].getAttribute("aria-live"), "polite");
+  const approve = root.querySelector('[data-key="approve:a1"]');
+  approve.click();
+  approve.click();
+  assert.deepEqual(e.actions.splice(0), [{ widgetId: "tasks", actionId: "task.approve:a1", values: { task_id: "a1" } }]);
+  assert.equal(approve.disabled, true);
+  root.querySelector('[data-key="view:a1"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "tasks", actionId: "task.view:a1", values: { task_id: "a1" } });
+  root.querySelector('[data-key="edit:a1"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "tasks", actionId: "task.edit:a1", values: { task_id: "a1" } });
+  e.api.render(e.container, [board({ summary: "done" })], { onAction: e.onAction });
+  assert.equal(e.container.querySelector('[data-key="approve:a1"]').disabled, false, "replaced board is live again");
+  assert.equal(e.container.children.length, 1);
+});
+
+test("composer states look different and carry text", () => {
+  const e = makeEnv();
+  const seen = {};
+  for (const [state, expected] of [["draft", /Draft, not sent/], ["copied", /Copied, not sent/], ["sent", /Sent/], ["failed", /Failed/]]) {
+    e.api.render(e.container, [composer({ state, detail: `detail for ${state}` })], { onAction: e.onAction });
+    const root = within(e, "composer.t7");
+    assert.match(root.textContent, expected);
+    assert.match(root.textContent, new RegExp(`detail for ${state}`));
+    seen[state] = root.querySelector("div").className;
+    assert.equal(root.querySelectorAll("textarea").length, state === "draft" ? 1 : 0, `${state} editable only as draft`);
+    assert.equal(!!root.querySelector('[data-key="send"]'), state === "draft");
+    assert.ok(root.querySelector('[data-key="copy"]'), "copy stays available as a fallback");
+  }
+  assert.equal(new Set(Object.values(seen)).size, 4, "four distinct looks");
+  assert.equal(e.container.children.length, 1);
+  e.api.render(e.container, [composer({ state: "sent", demo: true, detail: "Pretend delivery" })], {});
+  assert.match(e.container.textContent, /Demo: not really sent/);
+  assert.doesNotMatch(e.container.textContent.replace(/not really sent/g, ""), /\bSent\b/);
+  assert.match(e.container.textContent, /Body\nline two/);
+});
+
+test("composer Send posts edited values once, saves edits, and rests until replaced", () => {
+  const e = makeEnv();
+  e.api.render(e.container, [composer()], { onAction: e.onAction });
+  const root = within(e, "composer.t7");
+  root.querySelector('[name="body"]').type("Edited");
+  root.querySelector('[name="subject"]').type("New subject");
+  root.querySelector('[data-key="save"]').click();
+  assert.deepEqual(e.actions.pop(), { widgetId: "composer.t7", actionId: "task.edit:t7", values: { to: "a@b.c", subject: "New subject", body: "Edited" } });
+  const send = root.querySelector('[data-key="send"]');
+  send.click();
+  send.click();
+  send.dispatch("click");
+  assert.deepEqual(e.actions.splice(0), [{ widgetId: "composer.t7", actionId: "task.approve:t7", values: { to: "a@b.c", subject: "New subject", body: "Edited" } }]);
+  assert.equal(send.disabled, true);
+  e.api.render(e.container, [composer({ state: "draft", detail: "again" })], { onAction: e.onAction });
+  const again = within(e, "composer.t7");
+  assert.equal(again.querySelector('[data-key="send"]').disabled, false);
+  assert.equal(again.querySelector('[name="body"]').value, "Edited", "typed text survives replace");
+});
+
+test("composer Send re-enables if onAction rejects; copy fails gracefully", async () => {
+  const e = makeEnv();
+  e.api.render(e.container, [composer()], { onAction: () => Promise.reject(new Error("net")) });
+  const send = e.container.querySelector('[data-key="send"]');
+  send.click();
+  assert.equal(send.disabled, true);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(send.disabled, false);
+  e.container.querySelector('[data-key="copy"]').click();
+  assert.match(e.container.textContent, /Could not copy/);
+  const ok = [];
+  const c = makeEnv({ clipboard: { writeText: (t) => { ok.push(t); return Promise.resolve(); } } });
+  c.api.render(c.container, [composer({ state: "failed", detail: "x", editable: false })], {});
+  c.container.querySelector('[data-key="copy"]').click();
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(ok, ["To: a@b.c\nSubject: Hi\n\nBody\nline two"]);
+});
+
+test("calendar_view shows a Demo badge only when demo is true", () => {
+  const e = makeEnv();
+  const cal = (demo) => ({ id: "calendar", type: "calendar_view", title: "Week", demo, days: [{ date: "2026-11-09", events: [{ id: "e", title: "Ev", start: "10:00", end: "11:00" }] }] });
+  e.api.render(e.container, [cal(true)], {});
+  assert.match(e.container.textContent, /Demo/);
+  e.api.render(e.container, [cal(false)], {});
+  assert.doesNotMatch(e.container.textContent, /Demo/);
+  assert.equal(e.container.children.length, 1);
+});
+
+test("the extended source still avoids every forbidden API", () => {
+  assert.doesNotMatch(SOURCE, /innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\s*\(|new\s+Function|\.style\b|srcdoc/);
+  assert.doesNotMatch(SOURCE, /setAttribute\(\s*["'](style|on)/i);
 });

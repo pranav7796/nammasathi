@@ -113,6 +113,31 @@ const TRY_SAYING = {
     "en-IN": "Book a table for two in Indiranagar tomorrow at 7 PM, Italian",
   },
 };
+TRY_SAYING.day = {
+  "kn-IN": "ನನ್ನ ದಿನ ಯೋಜಿಸಿ",
+  "hi-IN": "मेरा दिन प्लान करो",
+  "en-IN": "Plan my day",
+};
+TRY_SAYING.email = {
+  "kn-IN": "ಮುಖ್ಯ ಇಮೇಲ್ ನೋಡಿ",
+  "hi-IN": "जरूरी ईमेल देखो",
+  "en-IN": "Check my important emails",
+};
+TRY_SAYING.meeting = {
+  "kn-IN": "ನಾಳೆ ಮಧ್ಯಾಹ್ನ 3 ಗಂಟೆಗೆ ರಾಹುಲ್ ಜೊತೆ ಮೀಟಿಂಗ್ ಹಾಕಿ",
+  "hi-IN": "कल दोपहर 3 बजे राहुल के साथ मीटिंग रखो",
+  "en-IN": "Schedule a meeting with Rahul tomorrow at 3 PM",
+};
+TRY_SAYING.whatsapp = {
+  "kn-IN": "ಅಮ್ಮನಿಗೆ ನಾನು 15 ನಿಮಿಷದಲ್ಲಿ ತಲುಪುತ್ತೇನೆ ಎಂದು ವಾಟ್ಸಾಪ್ ಮಾಡಿ",
+  "hi-IN": "अम्मा को व्हाट्सऐप भेजो कि मैं 15 मिनट में पहुँचूँगा",
+  "en-IN": "Send Amma a WhatsApp message saying I'll reach in 15 minutes",
+};
+TRY_SAYING.multi = {
+  "kn-IN": "ಮುಖ್ಯ ಇಮೇಲ್ ನೋಡಿ, ನಾಳೆ ಮಧ್ಯಾಹ್ನ 3 ಗಂಟೆಗೆ ರಾಹುಲ್ ಜೊತೆ ಮೀಟಿಂಗ್ ಹಾಕಿ ಮತ್ತು ಅಮ್ಮನಿಗೆ ನಾನು ತಡವಾಗಿ ಬರುತ್ತೇನೆ ಎಂದು ವಾಟ್ಸಾಪ್ ಮಾಡಿ",
+  "hi-IN": "जरूरी ईमेल देखो, कल दोपहर 3 बजे राहुल के साथ मीटिंग रखो और अम्मा को व्हाट्सऐप भेजो कि मैं देर से आऊँगा",
+  "en-IN": "Check my important emails, schedule a meeting with Rahul tomorrow afternoon, remind me to buy groceries, and send my mother a WhatsApp message saying I'll be late",
+};
 let tryCapability = "grocery";
 
 function currentPhrase() {
@@ -385,7 +410,12 @@ function renderReply(data) {
   }
   assistantNode.textContent = data.assistant_text || "I am ready for your next turn.";
   renderCart(data);
-  window.saathiShowWidgets?.(data.ui);
+  window.saathiShowWidgets?.(data.ui, data.plan);
+  // An email, calendar or reminder reply has no basket: hide the empty basket card beside it.
+  conversation.classList.toggle(
+    "plan-mode",
+    Boolean(data.plan) || (Array.isArray(data.ui) && data.ui.length > 0 && !(data.cart || []).length),
+  );
   if (data.commerce_mode === "swiggy") window.saathiAccountRefresh?.();
   scriptedNote.hidden = data.scripted_understanding !== true;
   if (SHOW_TIMINGS && data.timings_ms) {
@@ -779,16 +809,30 @@ document.querySelector("#try-phrase")?.addEventListener("click", async () => {
     showError("Choose a delivery address first, then try the phrase.");
     return;
   }
-  const phrase = currentPhrase();
-  await startConversation({ autoRecord: false });
-  if (!sessionId) return;
-  if (liveMode) {
-    textInput.value = phrase;
-    textInput.focus();
-  } else {
-    await sendText(phrase);
-  }
+  await window.saathiSay(currentPhrase());
 });
+
+// Starts a conversation if there is none, then says this. With a real Swiggy account it only fills
+// the text box, so nothing reaches anything real until the person presses Send themselves.
+window.saathiSay = async (text) => {
+  if (busy) return false;
+  if (!sessionId) {
+    if (startButton.disabled) {
+      showError("Choose a delivery address first, then try the phrase.");
+      return false;
+    }
+    await startConversation({ autoRecord: false });
+    if (!sessionId) return false;
+  }
+  if (liveMode) {
+    textInput.value = text;
+    textInput.focus();
+    return true;
+  }
+  await sendText(text);
+  return true;
+};
+window.saathiIsLive = () => liveMode;
 
 // The header gains a shadow once the page scrolls under it.
 const masthead = document.querySelector(".masthead");

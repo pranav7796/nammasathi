@@ -19,10 +19,28 @@ ACTION_IDS: frozenset[str] = frozenset(
         "task.retry",
         "task.cancel",
         "waitlist.join",
+        "task.approve",
+        "task.edit",
+        "task.view",
+        "email.open",
+        "email.reply",
+        "plan.toggle",
+        "plan.priority",
+        "plan.move",
+        "plan.add",
+        "memory.forget",
+        "memory.save",
+        "demo.next",
     }
 )
 
 _SUFFIX = re.compile(r"^[a-z0-9_.-]{1,40}$")
+# Mail ids come from the mail service as-is (docs/genui-spec.md addendum): mixed case, up to 100.
+_EMAIL_SUFFIX = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+_SUFFIX_BY_BASE: dict[str, re.Pattern[str]] = {
+    "email.open": _EMAIL_SUFFIX,
+    "email.reply": _EMAIL_SUFFIX,
+}
 
 
 def is_known_action(action_id: str) -> bool:
@@ -30,7 +48,7 @@ def is_known_action(action_id: str) -> bool:
     base, sep, suffix = action_id.partition(":")
     if base not in ACTION_IDS:
         return False
-    return not sep or bool(_SUFFIX.fullmatch(suffix))
+    return not sep or bool(_SUFFIX_BY_BASE.get(base, _SUFFIX).fullmatch(suffix))
 
 
 def targeted(action_id: str, target: str) -> str:

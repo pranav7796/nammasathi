@@ -6,14 +6,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Literal, Protocol
 
 from app.dining.state_machine import DiningSession
 from app.genui.actions import targeted
 from app.genui.models import Widget
-from app.genui.sanitize import clean_text
+from app.genui.sanitize import clean_multiline, clean_text
 from app.genui.validate import GenUIError, validate_widget
 from app.orchestrator.state_machine import CartEntry, Money
 
@@ -57,22 +57,89 @@ class CalendarInput:
     description: str | None = None
 
 
+TaskStatus = Literal[
+    "pending",
+    "running",
+    "waiting_for_input",
+    "waiting_for_approval",
+    "completed",
+    "failed",
+    "cancelled",
+]
+
+
 @dataclass(frozen=True)
 class TaskInput:
     id: str
     title: str
-    status: Literal[
-        "pending",
-        "running",
-        "waiting_for_input",
-        "waiting_for_approval",
-        "completed",
-        "failed",
-        "cancelled",
-    ]
+    status: TaskStatus
     detail: str | None = None
     retriable: bool = False
     cancellable: bool = False
+    approvable: bool = False  # adds task.approve:<id>
+    viewable: bool = False  # adds task.view:<id>
+    editable: bool = False  # adds task.edit:<id>
+
+
+@dataclass(frozen=True)
+class EmailItem:
+    id: str  # the mail service's own id, ^[A-Za-z0-9_-]{1,100}$
+    sender: str
+    subject: str
+    snippet: str
+    received: datetime
+    unread: bool = False
+    important: bool = False
+    needs_reply: bool = False
+
+
+@dataclass(frozen=True)
+class EventFields:
+    title: str
+    date: str | date  # "YYYY-MM-DD"
+    start: str | time  # "HH:MM"
+    minutes: int
+    attendees: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EventConflict:
+    title: str
+    start: str | time
+    end: str | time
+
+
+@dataclass(frozen=True)
+class PlannerItem:
+    id: str  # becomes the suffix of plan.toggle:<id> and friends: ^[a-z0-9_.-]{1,40}$
+    kind: Literal["event", "reminder", "email", "task"]
+    title: str
+    time: str | time | None = None
+    done: bool = False
+    priority: Literal["low", "normal", "high"] = "normal"
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class MemoryItem:
+    key: str  # suffix of memory.forget:<key>: ^[a-z0-9_.-]{1,40}$
+    label: str
+    value: str
+
+
+@dataclass(frozen=True)
+class DayEvent:
+    id: str
+    title: str
+    start: str | time
+    end: str | time
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class DayInput:
+    date: str | date
+    events: tuple[DayEvent, ...] = ()
 
 
 def inr(amount: Money) -> str:
@@ -229,7 +296,9 @@ def share_panel_widget(summary: str, calendar: CalendarInput | None = None) -> W
     )
 
 
-def task_board_widget(tasks: Sequence[TaskInput]) -> Widget:
+def task_board_widget(
+    tasks: Sequence[TaskInput], *, demo: bool, summary: str | None = None
+) -> Widget:
     rows: list[dict[str, Any]] = []
     for t in tasks:
         row: dict[str, Any] = {
@@ -243,8 +312,241 @@ def task_board_widget(tasks: Sequence[TaskInput]) -> Widget:
             row["retry_action_id"] = _target("task.retry", t.id)
         if t.cancellable:
             row["cancel_action_id"] = _target("task.cancel", t.id)
+        if t.approvable:
+            row["approve_action_id"] = _target("task.approve", t.id)
+        if t.viewable:
+            row["view_action_id"] = _target("task.view", t.id)
+        if t.editable:
+            row["edit_action_id"] = _target("task.edit", t.id)
         rows.append(row)
-    return _build({"type": "task_board", "id": "tasks", "title": "Tasks", "tasks": rows})
+    data: dict[str, Any] = {
+        "type": "task_board",
+        "id": "tasks",
+        "title": "Tasks",
+        "tasks": rows,
+        "demo": demo,
+    }
+    if summary:
+        data["summary"] = clean_text(summary, 300)
+    return _build(data)
+
+
+def _date_text(value: str | date) -> str:
+    return value.isoformat()[:10] if isinstance(value, date) else value
+
+
+def _time_text(value: str | time) -> str:
+    return value.strftime("%H:%M") if isinstance(value, time) else value
+
+
+def _capped(count: int, limit: int, what: str) -> None:
+    if count > limit:
+        raise GenUIError(f"at most {limit} {what}")
+
+
+def email_list_widget(
+    items: Sequence[EmailItem], *, title: str = "Your emails", demo: bool
+) -> Widget:
+    """Per item the browser derives email.open:<id> and email.reply:<id>."""
+    _capped(len(items), 10, "emails")
+    rows: list[dict[str, Any]] = []
+    for e in items:
+        _target("email.open", e.id)  # an id that cannot be an action suffix fails closed
+        rows.append(
+            {
+                "id": e.id,
+                "sender": clean_text(e.sender, 200) or "Unknown sender",
+                "subject": clean_text(e.subject, 300) or "(no subject)",
+                "snippet": clean_text(e.snippet, 500),
+                "received": e.received.isoformat(),
+                "unread": e.unread,
+                "important": e.important,
+                "needs_reply": e.needs_reply,
+            }
+        )
+    return _build(
+        {
+            "type": "email_list",
+            "id": "emails",
+            "title": clean_text(title, 200) or "Your emails",
+            "items": rows,
+            "empty_text": "No emails to show.",
+            "demo": demo,
+        }
+    )
+
+
+def event_preview_widget(
+    task_id: str,
+    *,
+    fields: EventFields,
+    conflicts: Sequence[EventConflict] = (),
+    state: Literal["draft", "created", "failed", "cancelled"],
+    detail: str | None = None,
+    demo: bool,
+    editable: bool = False,
+) -> Widget:
+    """Draft shows Approve (task.approve:<task_id>) and Cancel (task.cancel:<task_id>)."""
+    _capped(len(fields.attendees), 10, "attendees")
+    _capped(len(conflicts), 10, "conflicts")
+    attendees = [a for a in (clean_text(x, 320) for x in fields.attendees) if a]
+    data: dict[str, Any] = {
+        "type": "event_preview",
+        "id": f"event.{task_id}",
+        "title": "New event",
+        "fields": {
+            "title": clean_text(fields.title, 200) or "Event",
+            "date": _date_text(fields.date),
+            "start": _time_text(fields.start),
+            "minutes": fields.minutes,
+            "attendees": attendees,
+        },
+        "conflicts": [
+            {
+                "title": clean_text(c.title, 200) or "Busy",
+                "start": _time_text(c.start),
+                "end": _time_text(c.end),
+            }
+            for c in conflicts
+        ],
+        "state": state,
+        "approve": {
+            "label": "Approve",
+            "action_id": _target("task.approve", task_id),
+            "style": "primary",
+        },
+        "cancel": {"label": "Cancel", "action_id": _target("task.cancel", task_id)},
+        "demo": demo,
+        "editable": editable,
+    }
+    if detail:
+        data["detail"] = clean_text(detail, 500)
+    return _build(data)
+
+
+def day_planner_widget(
+    *, date: str | date, items: Sequence[PlannerItem], demo: bool, editable: bool = False
+) -> Widget:
+    """The browser derives plan.toggle:<id>, plan.priority:<id>, plan.move:<id> and plan.add."""
+    _capped(len(items), 40, "plan items")
+    rows: list[dict[str, Any]] = []
+    for it in items:
+        _target("plan.toggle", it.id)
+        row: dict[str, Any] = {
+            "id": it.id,
+            "kind": it.kind,
+            "title": clean_text(it.title, 200) or "Item",
+            "done": it.done,
+            "priority": it.priority,
+        }
+        if it.time is not None:
+            row["time"] = _time_text(it.time)
+        if it.detail:
+            row["detail"] = clean_text(it.detail, 300)
+        rows.append(row)
+    return _build(
+        {
+            "type": "day_planner",
+            "id": "planner",
+            "title": "Your day",
+            "date": _date_text(date),
+            "items": rows,
+            "demo": demo,
+            "editable": editable,
+        }
+    )
+
+
+def memory_list_widget(items: Sequence[MemoryItem], *, consent_text: str) -> Widget:
+    """The browser derives memory.forget:<key> and a form posting memory.save {key, value}."""
+    _capped(len(items), 30, "memories")
+    rows: list[dict[str, str]] = []
+    for m in items:
+        _target("memory.forget", m.key)
+        rows.append(
+            {
+                "key": m.key,
+                "label": clean_text(m.label, 100) or "Memory",
+                "value": clean_text(m.value, 500),
+            }
+        )
+    return _build(
+        {
+            "type": "memory_list",
+            "id": "memory",
+            "title": "What I remember",
+            "items": rows,
+            "empty_text": "I am not remembering anything about you yet.",
+            "consent_text": clean_text(consent_text, 500) or "Kept only to help you.",
+        }
+    )
+
+
+def calendar_view_widget(
+    days: Sequence[DayInput], *, title: str = "Your calendar", demo: bool
+) -> Widget:
+    out = [
+        {
+            "date": _date_text(d.date),
+            "events": [
+                {
+                    "id": ev.id,
+                    "title": clean_text(ev.title, 200) or "Event",
+                    "start": _time_text(ev.start),
+                    "end": _time_text(ev.end),
+                    **({"detail": clean_text(ev.detail, 300)} if ev.detail else {}),
+                }
+                for ev in d.events
+            ],
+        }
+        for d in days
+    ]
+    return _build(
+        {
+            "type": "calendar_view",
+            "id": "calendar",
+            "title": clean_text(title, 200) or "Your calendar",
+            "days": out,
+            "demo": demo,
+        }
+    )
+
+
+def composer_widget(
+    task_id: str,
+    *,
+    channel: Literal["email", "message"],
+    to: str | None = None,
+    subject: str | None = None,
+    body: str,
+    state: Literal["draft", "sent", "copied", "failed"],
+    detail: str | None = None,
+    demo: bool,
+    editable: bool = False,
+) -> Widget:
+    """Send is task.approve:<task_id>; the browser posts edits as task.edit:<task_id>."""
+    data: dict[str, Any] = {
+        "type": "composer",
+        "id": f"composer.{task_id}",
+        "channel": channel,
+        "body": clean_multiline(body, 2000),
+        "send": {
+            "label": "Send",
+            "action_id": _target("task.approve", task_id),
+            "style": "primary",
+        },
+        "copy_enabled": True,
+        "state": state,
+        "demo": demo,
+        "editable": editable,
+    }
+    if to is not None:
+        data["to"] = clean_text(to, 500)
+    if subject is not None:
+        data["subject"] = clean_text(subject, 500)
+    if detail:
+        data["detail"] = clean_text(detail, 500)
+    return _build(data)
 
 
 def reminder_list_widget(reminders: Sequence[ReminderInput]) -> Widget:

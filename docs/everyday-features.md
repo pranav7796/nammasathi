@@ -1,6 +1,6 @@
 # Everyday features: widgets, reminders, notes, waitlist
 
-Added after the ordering flow, for the Gnani challenge. Contract for widgets: [genui-spec.md](genui-spec.md).
+Added after the ordering flow, for the Gnani challenge. Gmail, Calendar and WhatsApp setup: [integrations-setup.md](integrations-setup.md). Contract for widgets: [genui-spec.md](genui-spec.md).
 
 ## What works end to end (tested)
 
@@ -55,3 +55,54 @@ http://localhost:8123 OUT_DIR` (needs `chromium` on the path).
 
 These are on the feature branch only. Deploying runs migration 3 on the production database (it adds
 three tables and changes nothing else).
+
+---
+
+# Update: the task board, Gmail, Calendar, WhatsApp, My day, memory
+
+**Implemented and tested against stand-ins. Not live-verified** (no real Google or Meta credentials were
+available). Without credentials each service shows labelled **Demo** data. See
+[integrations-setup.md](integrations-setup.md) to connect the real ones.
+
+## What happens to one sentence
+
+"Check my important emails, schedule a meeting with Rahul tomorrow afternoon, remind me to buy groceries,
+and send my mother a WhatsApp message saying I'll be late" becomes five tasks on a board.
+
+```
+text or speech -> looks_like_a_plan() -> make_plan()   (a model proposes, rules are the fallback)
+              -> validate every task against the closed catalogue (app/tasks/kinds.py)
+              -> TaskEngine: reads run together; anything that changes something stops at
+                 "waiting for approval" with the exact content
+              -> the person approves (or edits) -> one compare-and-set -> the effect runs once
+              -> the result is read back before it is called done
+```
+
+| Promise | Where it is enforced | Test |
+|---|---|---|
+| Independent reads run at the same time, and the board says so only from recorded timestamps | `engine.overlapping` | `test_task_engine.py` |
+| Nothing external runs before approval | `engine.approve` | `test_nothing_that_changes_something_runs_before_approval` |
+| Approving twice acts once | database compare-and-set | `test_approving_twice_at_once_acts_once` |
+| What is sent is what was approved; any edit changes the hash | `executors.args_hash` | `test_what_is_sent_is_exactly_what_was_approved_after_editing` |
+| An unconfirmed effect is never called a success and is never retried blindly | `engine.approve`, `recover_interrupted` | `test_an_unconfirmed_send_...`, `test_an_interrupted_effect_...` |
+| One person cannot touch another's tasks | every query filters by user | `test_one_person_cannot_touch_anothers_tasks` |
+| Text inside an email is data, never an instruction | no planner call on email content | `test_instructions_inside_an_email_are_inert_data` |
+| A made-up demo contact is never used on a real channel | `DemoContacts` | `test_a_demo_contact_is_never_used_for_a_real_channel` |
+| Spoken approval needs a readback and an explicit confirm | `turn._voice_approval` | `test_voice_approval_...` |
+| "Make it 4 PM instead" updates the same widget | widget id `event.<task id>` | `test_changing_the_time_...` |
+
+## What works with no credentials
+
+Planning in English, Hindi and Kannada, the task board, the day planner, reminders, notes, memory,
+contacts, share and calendar-file buttons, the guided demo, and every Demo-labelled email, event and
+message. Nothing leaves the site.
+
+## Limits
+
+- Live Gmail, Calendar and WhatsApp are untested against the real services.
+- WhatsApp sends free text only (no templates), so it works only inside Meta's 24-hour window.
+- Rescheduling and cancelling an existing event is in the engine but not reachable by speech, because
+  the planner cannot yet name an event. Changing the time of an event you are about to create is.
+- Task and approval wording on the board is English; spoken replies are in the chosen language.
+- Rate limits and the idempotency memory of adapters are per process.
+- Web research, PDF summaries, translation, expense tracking and local discovery are not built.

@@ -285,7 +285,10 @@ Choose the relevant role for each task:
 food share `app/orchestrator/`, differing only by adapter (`app/commerce/`, `app/food/`).
 Table booking is `app/dining/`. All share one journal, `app/commerce/order_journal.py`.
 Widgets are `app/genui/` (server builds and validates, browser only draws; see `docs/genui-spec.md`),
-reminders and notes are `app/personal/`, and the waitlist is `app/waitlist.py`. None of them give the
+reminders and notes are `app/personal/`, and the waitlist is `app/waitlist.py`.
+The task engine is `app/tasks/` (closed catalogue in `kinds.py`; a plan is validated, side effects
+wait for approval of the exact content), with adapters in `app/google/` and `app/whatsapp/` behind the
+protocols in `app/integrations/base.py`, and memory and contacts in `app/memory/`. None of them give the
 LLM a tool: see `docs/everyday-features.md`.
 Do not build a generic agent framework or give the LLM tools.
 

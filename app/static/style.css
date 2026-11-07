@@ -332,3 +332,23 @@ html { scroll-padding-top: 170px; }
 
 /* The waitlist belongs to the home screen only. */
 .home-panel[hidden] ~ .waitlist-section { display: none !important; }
+
+/* Panels inside "My day", and the guided-demo card. */
+.panel-section { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
+.panel-section h3 { margin: 0 0 6px; font-family: var(--display); font-size: 1.1rem; color: var(--teal-dark); }
+.conn-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.contact-form { display: grid; gap: 8px; margin-top: 10px; }
+.contact-form label { display: grid; gap: 4px; font-size: .85rem; font-weight: 700; }
+.contact-form input { padding: 10px 12px; border: 2px solid var(--line); border-radius: 12px; background: white; }
+.contact-add { min-height: 46px; font-size: 1rem; }
+.guide-start { margin: 8px 0 0; }
+.guide { position: fixed; z-index: 30; right: 16px; bottom: 120px; width: min(360px, calc(100vw - 32px)); padding: 16px; border-radius: 20px; background: var(--panel); box-shadow: 0 18px 50px rgb(68 45 20 / 28%); border: 2px solid var(--marigold); }
+.guide-step { margin: 0 0 4px; font-size: .75rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--teal); }
+.guide-caption { margin: 0 0 8px; font-size: .95rem; }
+.guide-phrase { margin: 0 0 10px; padding: 8px 12px; border-left: 3px solid var(--teal); background: var(--teal-tint); border-radius: 8px; font-weight: 500; font-size: .95rem; overflow-wrap: anywhere; }
+.guide-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.guide-actions .start-button { width: auto; min-height: 44px; padding: 8px 18px; font-size: 1rem; }
+@media (max-width: 640px) { .guide { right: 16px; left: 16px; width: auto; bottom: 112px; } }
+
+.conversation.plan-mode .conversation-side { display: none; }
+.conversation.plan-mode .conversation-grid { grid-template-columns: minmax(0, 1fr); }

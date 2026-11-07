@@ -85,6 +85,9 @@ IsoStr = Annotated[str, AfterValidator(_safe), AfterValidator(_iso)]
 IsoOffset = Annotated[str, AfterValidator(_safe), AfterValidator(_iso_offset)]
 DateStr = Annotated[str, AfterValidator(_date)]
 HhMm = Annotated[str, AfterValidator(_hhmm)]
+EmailId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_\-]{1,100}$")]
+# Ids that become an action suffix ("plan.toggle:<id>"), so they must fit the suffix rule.
+SuffixId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_.-]{1,40}$")]
 Status = Literal[
     "pending",
     "running",
@@ -204,12 +207,17 @@ class Task(_Model):
     detail: Text | None = None
     retry_action_id: ActionId | None = None
     cancel_action_id: ActionId | None = None
+    approve_action_id: ActionId | None = None
+    view_action_id: ActionId | None = None
+    edit_action_id: ActionId | None = None
 
 
 class TaskBoard(_Widget):
     type: Literal["task_board"] = "task_board"
     title: Title
     tasks: Annotated[list[Task], Field(max_length=MAX_ITEMS)]
+    demo: bool = False
+    summary: Text | None = None
 
 
 class Progress(_Widget):
@@ -266,6 +274,10 @@ class Composer(_Widget):
     body: Text
     send: Action
     copy_enabled: bool
+    state: Literal["draft", "sent", "copied", "failed"]
+    detail: Text | None = None
+    demo: bool
+    editable: bool = True
 
 
 class CalendarEvent(_Model):
@@ -285,6 +297,7 @@ class CalendarView(_Widget):
     type: Literal["calendar_view"] = "calendar_view"
     title: Title
     days: Annotated[list[CalendarDay], Field(max_length=MAX_ITEMS)]
+    demo: bool = False
 
 
 class ReminderItem(_Model):
@@ -334,6 +347,112 @@ class StatusWidget(_Widget):
     retry: Action | None = None
 
 
+MAX_EMAILS = 10
+MAX_PLAN_ITEMS = 40
+MAX_MEMORIES = 30
+MAX_ATTENDEES = 10
+MAX_CONFLICTS = 10
+
+
+def _unique(values: list[str], what: str) -> None:
+    if len(set(values)) != len(values):
+        raise ValueError(f"duplicate {what}")
+
+
+class EmailRow(_Model):
+    id: EmailId
+    sender: Title
+    subject: Text
+    snippet: Text
+    received: IsoStr
+    unread: bool
+    important: bool
+    needs_reply: bool
+
+
+class EmailList(_Widget):
+    type: Literal["email_list"] = "email_list"
+    title: Title
+    items: Annotated[list[EmailRow], Field(max_length=MAX_EMAILS)]
+    empty_text: Text
+    demo: bool
+
+    @model_validator(mode="after")
+    def _ids(self) -> EmailList:
+        _unique([i.id for i in self.items], "email id")
+        return self
+
+
+class EventFields(_Model):
+    title: Title
+    date: DateStr
+    start: HhMm
+    minutes: Annotated[int, Field(ge=1, le=1440)]
+    attendees: Annotated[list[Title], Field(max_length=MAX_ATTENDEES)]
+
+
+class EventConflict(_Model):
+    title: Title
+    start: HhMm
+    end: HhMm
+
+
+class EventPreview(_Widget):
+    type: Literal["event_preview"] = "event_preview"
+    title: Title
+    fields: EventFields
+    conflicts: Annotated[list[EventConflict], Field(max_length=MAX_CONFLICTS)]
+    state: Literal["draft", "created", "failed", "cancelled"]
+    detail: Text | None = None
+    approve: Action  # action_id is task.approve:<task id>
+    cancel: Action | None = None  # action_id is task.cancel:<task id>
+    demo: bool
+    editable: bool
+
+
+class PlanItem(_Model):
+    id: SuffixId
+    kind: Literal["event", "reminder", "email", "task"]
+    title: Title
+    time: HhMm | None = None
+    done: bool
+    priority: Literal["low", "normal", "high"]
+    detail: Text | None = None
+
+
+class DayPlanner(_Widget):
+    type: Literal["day_planner"] = "day_planner"
+    title: Title
+    date: DateStr
+    items: Annotated[list[PlanItem], Field(max_length=MAX_PLAN_ITEMS)]
+    demo: bool
+    editable: bool
+
+    @model_validator(mode="after")
+    def _ids(self) -> DayPlanner:
+        _unique([i.id for i in self.items], "plan item id")
+        return self
+
+
+class MemoryRow(_Model):
+    key: SuffixId
+    label: Title
+    value: Text
+
+
+class MemoryList(_Widget):
+    type: Literal["memory_list"] = "memory_list"
+    title: Title
+    items: Annotated[list[MemoryRow], Field(max_length=MAX_MEMORIES)]
+    empty_text: Text
+    consent_text: Title
+
+    @model_validator(mode="after")
+    def _keys(self) -> MemoryList:
+        _unique([i.key for i in self.items], "memory key")
+        return self
+
+
 Widget = Annotated[
     Heading
     | TextWidget
@@ -351,7 +470,11 @@ Widget = Annotated[
     | ReminderList
     | NoteList
     | SharePanel
-    | StatusWidget,
+    | StatusWidget
+    | EmailList
+    | EventPreview
+    | DayPlanner
+    | MemoryList,
     Field(discriminator="type"),
 ]
 

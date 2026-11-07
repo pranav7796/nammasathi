@@ -11,7 +11,7 @@ class Element {
     this.dataset = {};
     this.attributes = {};
     this.listeners = {};
-    this.classList = { add() {}, remove() {} };
+    this.classList = { add() {}, remove() {}, toggle() {} };
     this.hidden = false;
     this.disabled = false;
     this.textContent = "";

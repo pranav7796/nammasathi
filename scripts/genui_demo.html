@@ -43,11 +43,11 @@
           { name: "day", label: "Date", kind: "date", value: "2026-11-09" },
           { name: "at", label: "Time", kind: "time", value: "19:30" },
           { name: "outdoor", label: "Outdoor seating", kind: "checkbox", value: false } ] },
-      { id: "tasks1", type: "task_board", title: "Tasks", tasks: [
-          { id: "k1", title: "Search groceries", status: "completed" },
-          { id: "k2", title: "Check table availability", status: "running", detail: "Asking the restaurant", cancel_action_id: "task.cancel.k2" },
-          { id: "k3", title: "Send reminder", status: "failed", detail: "Network problem", retry_action_id: "task.retry.k3" },
-          { id: "k4", title: "Pay", status: "waiting_for_approval" },
+      { id: "tasks1", type: "task_board", title: "Tasks", demo: true, summary: "1 done, 1 running, 2 need you", tasks: [
+          { id: "k1", title: "Search groceries", status: "completed", view_action_id: "task.view:k1" },
+          { id: "k2", title: "Check table availability", status: "running", detail: "Asking the restaurant", cancel_action_id: "task.cancel:k2" },
+          { id: "k3", title: "Send reminder", status: "failed", detail: "Network problem", retry_action_id: "task.retry:k3" },
+          { id: "k4", title: "Email Asha about dinner", status: "waiting_for_approval", detail: "Draft is ready", approve_action_id: "task.approve:k4", view_action_id: "task.view:k4", edit_action_id: "task.edit:k4", cancel_action_id: "task.cancel:k4" },
           { id: "k5", title: "Old task", status: "cancelled" },
           { id: "k6", title: "Queued", status: "pending" },
           { id: "k7", title: "Needs a choice", status: "waiting_for_input" } ] },
@@ -60,8 +60,11 @@
         details: [{ label: "Items", value: "2 x Sona Masoori Rice" }, { label: "Total", value: "Rs 156.00" }, { label: "Deliver to", value: "Home" }],
         consequence: "If you say yes, the demo order is placed. Nothing real is ordered.",
         confirm: { label: "Yes, place it", action_id: "order.confirm", style: "primary" }, reject: { label: "No, go back", action_id: "order.reject" } },
-      { id: "comp1", type: "composer", channel: "email", to: "asha@example.com", subject: "Dinner on Saturday", body: "Hi Asha,\n\nShall we meet at 7:30 pm on Saturday?\n\nThanks", send: { label: "Send draft", action_id: "compose.send", style: "primary" }, copy_enabled: true },
-      { id: "cal1", type: "calendar_view", title: "This week", days: [
+      { id: "comp1", type: "composer", channel: "email", to: "asha@example.com", subject: "Dinner on Saturday", body: "Hi Asha,\n\nShall we meet at 7:30 pm on Saturday?\n\nThanks", send: { label: "Send", action_id: "task.approve:c1", style: "primary" }, copy_enabled: true, state: "draft", demo: true, editable: true },
+      { id: "comp2", type: "composer", channel: "email", to: "asha@example.com", subject: "Dinner on Saturday", body: "Hi Asha, see you at 7:30.", send: { label: "Send", action_id: "task.approve:c2", style: "primary" }, copy_enabled: true, state: "sent", detail: "Delivered to Gmail (demo)", demo: false, editable: false },
+      { id: "comp3", type: "composer", channel: "message", to: "Ravi", body: "Running late, start without me.", send: { label: "Send", action_id: "task.approve:c3", style: "primary" }, copy_enabled: true, state: "copied", detail: "Copied to the clipboard.", demo: false, editable: false },
+      { id: "comp4", type: "composer", channel: "message", to: "Ravi", body: "Running late.", send: { label: "Send", action_id: "task.approve:c4", style: "primary" }, copy_enabled: true, state: "failed", detail: "WhatsApp is not connected.", demo: false, editable: false },
+      { id: "cal1", type: "calendar_view", title: "This week", demo: true, days: [
           { date: "2026-11-09", events: [{ id: "e1", title: "Standup", start: "10:00", end: "10:30" }, { id: "e2", title: "Dinner with Asha", start: "19:30", end: "21:00", detail: "Toit, Indiranagar" }] },
           { date: "2026-11-10", events: [] },
           { date: "2026-11-11", events: [{ id: "e3", title: "Dentist", start: "09:00", end: "10:00" }] } ] },
@@ -76,6 +79,28 @@
       { id: "stat4", type: "status", kind: "error", message: "Could not reach the restaurant", retry: { label: "Try again", action_id: "status.retry", style: "primary" } },
       { id: "share1", type: "share_panel", title: "Share this plan", summary: "Dinner with Asha, Monday 9 Nov, 7:30 pm at Toit, Indiranagar.",
         calendar: { title: "Dinner, with Asha; Toit", start: "2026-11-09T19:30:00+05:30", end: "2026-11-09T21:00:00+05:30", location: "Toit, Indiranagar, Bengaluru", description: "Booked by Namma Saathi" } },
+      { id: "emails1", type: "email_list", title: "Emails that need you", demo: true, empty_text: "No emails.", items: [
+          { id: "18c3F_a1", sender: "Rahul Sharma", subject: "Can we meet tomorrow afternoon?", snippet: "Hi, can we meet tomorrow afternoon to go over the plan? Let me know what suits you.", received: new Date(Date.now() - 25 * 60000).toISOString(), unread: true, important: true, needs_reply: true },
+          { id: "m2", sender: "Swiggy Instamart with a very long sender name to test wrapping", subject: "Your order was delivered", snippet: "Thanks for ordering.", received: new Date(Date.now() - 5 * 3600000).toISOString(), unread: false, important: false, needs_reply: false },
+          { id: "m3", sender: "Asha", subject: "Dinner?", snippet: "", received: new Date(Date.now() - 3 * 86400000).toISOString(), unread: false, important: false, needs_reply: true } ] },
+      { id: "event.e1", type: "event_preview", title: "New event", state: "draft", demo: true, editable: true,
+        fields: { title: "Dinner with Asha", date: "2026-11-09", start: "19:30", minutes: 90, attendees: ["asha@example.com", "ravi@example.com"] },
+        conflicts: [{ title: "Team standup", start: "19:00", end: "20:00" }],
+        approve: { label: "Approve", action_id: "task.approve:e1", style: "primary" }, cancel: { label: "Cancel", action_id: "task.cancel:e1" } },
+      { id: "event.e2", type: "event_preview", title: "New event", state: "created", demo: false, editable: false, detail: "Added to your Google Calendar.",
+        fields: { title: "Dentist", date: "2026-11-11", start: "09:00", minutes: 60, attendees: [] }, conflicts: [],
+        approve: { label: "Approve", action_id: "task.approve:e2", style: "primary" } },
+      { id: "event.e3", type: "event_preview", title: "New event", state: "failed", demo: false, editable: false, detail: "Google Calendar said no.",
+        fields: { title: "Yoga", date: "2026-11-12", start: "07:00", minutes: 45, attendees: [] }, conflicts: [],
+        approve: { label: "Approve", action_id: "task.approve:e3", style: "primary" } },
+      { id: "planner1", type: "day_planner", title: "Your day", date: "2026-11-09", demo: true, editable: true, items: [
+          { id: "p1", kind: "event", title: "Standup", time: "10:00", done: true, priority: "normal", detail: "Google Meet" },
+          { id: "p2", kind: "email", title: "Reply to Rahul", done: false, priority: "high" },
+          { id: "p3", kind: "reminder", title: "Pay electricity bill", time: "17:30", done: false, priority: "normal" },
+          { id: "p4", kind: "task", title: "Order groceries for the weekend", done: false, priority: "low" } ] },
+      { id: "memory1", type: "memory_list", title: "What I remember", empty_text: "Nothing yet.", consent_text: "I keep these so I can personalise answers. Forget any of them at any time.", items: [
+          { key: "diet", label: "Diet", value: "Vegetarian" },
+          { key: "home_area", label: "Home area", value: "Indiranagar, Bengaluru" } ] },
     ];
     window.demoOnAction = function (a) {
       window.actions.push(a);

@@ -23,12 +23,25 @@ from app.dining.state_machine import (
 from app.genui.actions import ACTION_IDS, is_known_action
 from app.genui.builders import (
     CalendarInput,
+    DayEvent,
+    DayInput,
+    EmailItem,
+    EventConflict,
+    EventFields,
+    MemoryItem,
     NoteInput,
+    PlannerItem,
     ReminderInput,
     TaskInput,
     booking_confirmation_widget,
+    calendar_view_widget,
     cart_widget,
+    composer_widget,
     confirmation_widget,
+    day_planner_widget,
+    email_list_widget,
+    event_preview_widget,
+    memory_list_widget,
     new_note_form,
     new_reminder_form,
     note_list_widget,
@@ -37,7 +50,7 @@ from app.genui.builders import (
     status_widget,
     task_board_widget,
 )
-from app.genui.sanitize import clean_text
+from app.genui.sanitize import clean_multiline, clean_text
 from app.genui.validate import GenUIError, to_wire, validate_envelope, validate_widget
 from app.orchestrator.state_machine import CartEntry, Session
 
@@ -134,6 +147,8 @@ EXAMPLES: dict[str, dict[str, Any]] = {
         "body": "b",
         "send": ACT,
         "copy_enabled": True,
+        "state": "draft",
+        "demo": False,
     },
     "calendar_view": {
         "type": "calendar_view",
@@ -166,6 +181,72 @@ EXAMPLES: dict[str, dict[str, Any]] = {
         "calendar": {"title": "m", "start": NOW, "end": NOW, "location": "l"},
     },
     "status": {"type": "status", "id": "st", "kind": "error", "message": "m", "retry": ACT},
+    "email_list": {
+        "type": "email_list",
+        "id": "em",
+        "title": "Emails",
+        "items": [
+            {
+                "id": "18c3F_a-1",
+                "sender": "Asha",
+                "subject": "Dinner?",
+                "snippet": "Are you free",
+                "received": NOW,
+                "unread": True,
+                "important": False,
+                "needs_reply": True,
+            }
+        ],
+        "empty_text": "none",
+        "demo": True,
+    },
+    "event_preview": {
+        "type": "event_preview",
+        "id": "ev",
+        "title": "New event",
+        "fields": {
+            "title": "Dinner",
+            "date": "2026-11-09",
+            "start": "19:30",
+            "minutes": 90,
+            "attendees": ["asha@example.com"],
+        },
+        "conflicts": [{"title": "Standup", "start": "19:00", "end": "20:00"}],
+        "state": "draft",
+        "detail": "d",
+        "approve": {"label": "Approve", "action_id": "task.approve:t1", "style": "primary"},
+        "cancel": {"label": "Cancel", "action_id": "task.cancel:t1"},
+        "demo": False,
+        "editable": True,
+    },
+    "day_planner": {
+        "type": "day_planner",
+        "id": "dp",
+        "title": "Your day",
+        "date": "2026-11-09",
+        "items": [
+            {
+                "id": "p1",
+                "kind": "event",
+                "title": "Standup",
+                "time": "10:00",
+                "done": False,
+                "priority": "high",
+                "detail": "d",
+            },
+            {"id": "p2", "kind": "task", "title": "Pay", "done": True, "priority": "low"},
+        ],
+        "demo": False,
+        "editable": True,
+    },
+    "memory_list": {
+        "type": "memory_list",
+        "id": "mem",
+        "title": "What I remember",
+        "items": [{"key": "diet", "label": "Diet", "value": "vegetarian"}],
+        "empty_text": "none",
+        "consent_text": "Kept to personalise answers.",
+    },
 }
 
 
@@ -294,7 +375,7 @@ def test_action_ids() -> None:
         validate_widget(board)
     assert is_known_action("cart.set_quantity")
     assert not is_known_action("")
-    assert len(ACTION_IDS) == 12
+    assert len(ACTION_IDS) == 24
 
 
 def test_duplicate_ids_in_envelope_rejected() -> None:
@@ -392,7 +473,8 @@ def test_other_builders_produce_valid_widgets() -> None:
         share_panel_widget("Dinner at 7", CalendarInput("Dinner", ist, ist, location="Toscano")),
         share_panel_widget("no calendar"),
         task_board_widget(
-            [TaskInput("ab12", "Send", "failed", "oops", retriable=True, cancellable=True)]
+            [TaskInput("ab12", "Send", "failed", "oops", retriable=True, cancellable=True)],
+            demo=False,
         ),
         reminder_list_widget([ReminderInput("ab12", "Call mom", ist), ReminderInput("c3", "x")]),
         note_list_widget([NoteInput("n1", "buy milk", ist)]),
@@ -414,7 +496,7 @@ def test_other_builders_produce_valid_widgets() -> None:
     note = next(w for w in wires if w["id"] == "form.note")
     assert note["fields"][0]["kind"] == "textarea" and note["submit"]["action_id"] == "note.create"
     with pytest.raises(GenUIError):  # an id that cannot be an action suffix fails closed
-        task_board_widget([TaskInput("Bad Id", "x", "failed", retriable=True)])
+        task_board_widget([TaskInput("Bad Id", "x", "failed", retriable=True)], demo=False)
 
 
 def test_sanitize() -> None:
@@ -424,4 +506,420 @@ def test_sanitize() -> None:
     assert "<s" not in clean_text("<<script>", 100)
     assert "javascript:" not in clean_text("javajavascript:script:x", 100).lower()
     assert clean_text("anything", 0) == ""
+    assert "javascript" not in clean_text("java\nscript:x j a v a s c r i p t :y", 100).lower()
     validate_widget(_bad(text=clean_text("<b>hi</b> javascript:x", 100)))
+
+
+# ------------------------------------------- addendum: Gmail, Calendar, planner, memory
+def _ex(name: str, **over: Any) -> dict[str, Any]:
+    data = deepcopy(EXAMPLES[name])
+    data.update(over)
+    return data
+
+
+def _rejects(data: dict[str, Any]) -> None:
+    with pytest.raises(GenUIError):
+        validate_widget(data)
+
+
+@pytest.mark.parametrize("name", ["email_list", "event_preview", "day_planner", "composer"])
+def test_demo_is_required_on_the_addendum_widgets(name: str) -> None:
+    data = _ex(name)
+    data.pop("demo")
+    _rejects(data)
+    _rejects(_ex(name, demo="yes"))
+    _rejects(_ex(name, demo=1))
+
+
+def test_old_task_board_and_calendar_still_valid_without_new_fields() -> None:
+    board = validate_widget(
+        {
+            "type": "task_board",
+            "id": "tb",
+            "title": "T",
+            "tasks": [{"id": "a", "title": "x", "status": "pending"}],
+        }
+    )
+    assert to_wire([board])[0]["demo"] is False
+    cal = deepcopy(EXAMPLES["calendar_view"])
+    assert "demo" not in cal
+    validate_widget(cal)
+    validate_widget({**cal, "demo": True})
+    _rejects({**cal, "demo": "no"})
+
+
+def test_task_board_extensions() -> None:
+    board = deepcopy(EXAMPLES["task_board"])
+    board["demo"] = True
+    board["summary"] = "2 of 3 done"
+    board["tasks"][0].update(
+        approve_action_id="task.approve:k1",
+        view_action_id="task.view:k1",
+        edit_action_id="task.edit:k1",
+    )
+    wire = to_wire([validate_widget(board)])[0]
+    assert wire["tasks"][0]["view_action_id"] == "task.view:k1" and wire["summary"] == "2 of 3 done"
+    for key in ("approve_action_id", "view_action_id", "edit_action_id"):
+        bad = deepcopy(board)
+        bad["tasks"][0][key] = "evil.go:k1"
+        _rejects(bad)
+    _rejects({**board, "demo": "x"})
+    _rejects({**board, "summary": "<b>x</b>"})
+
+
+def test_composer_states_and_fields() -> None:
+    for state in ("draft", "sent", "copied", "failed"):
+        validate_widget(_ex("composer", state=state, detail="delivered", editable=False))
+    _rejects(_ex("composer", state="queued"))
+    bad = _ex("composer")
+    bad.pop("state")
+    _rejects(bad)
+    _rejects(_ex("composer", detail="<script>x</script>"))
+    _rejects(_ex("composer", editable="yes"))
+
+
+def test_email_list_limits_and_ids() -> None:
+    row = EXAMPLES["email_list"]["items"][0]
+
+    def rows(n: int) -> list[dict[str, Any]]:
+        return [{**row, "id": f"m{i}"} for i in range(n)]
+
+    validate_widget(_ex("email_list", items=rows(10)))
+    _rejects(_ex("email_list", items=rows(11)))
+    validate_widget(_ex("email_list", items=[]))
+    for bad_id in ("", "a b", "a:b", "a/b", "x" * 101):
+        _rejects(_ex("email_list", items=[{**row, "id": bad_id}]))
+    validate_widget(_ex("email_list", items=[{**row, "id": "X" * 100}]))
+    _rejects(_ex("email_list", items=[row, row]))  # duplicate id
+    _rejects(_ex("email_list", items=[{**row, "received": "yesterday"}]))
+    _rejects(_ex("email_list", items=[{**row, "unread": "yes"}]))
+    missing = {k: v for k, v in row.items() if k != "needs_reply"}
+    _rejects(_ex("email_list", items=[missing]))
+    _rejects(_ex("email_list", items=[{**row, "subject": "<script>alert(1)</script>"}]))
+    _rejects(_ex("email_list", items=[{**row, "snippet": "javascript:alert(1)"}]))
+    _rejects(_ex("email_list", items=[{**row, "extra": 1}]))
+
+
+def test_event_preview_validation() -> None:
+    def fields(**over: Any) -> dict[str, Any]:
+        return {**EXAMPLES["event_preview"]["fields"], **over}
+
+    validate_widget(
+        _ex("event_preview", fields=fields(attendees=[f"a{i}@x.io" for i in range(10)]))
+    )
+    _rejects(_ex("event_preview", fields=fields(attendees=[f"a{i}@x.io" for i in range(11)])))
+    conflict = {"title": "Busy", "start": "10:00", "end": "11:00"}
+    validate_widget(_ex("event_preview", conflicts=[conflict] * 10))
+    _rejects(_ex("event_preview", conflicts=[conflict] * 11))
+    for bad in (
+        fields(date="2026-13-45"),
+        fields(date="09-11-2026"),
+        fields(start="25:00"),
+        fields(start="9:30"),
+        fields(minutes=0),
+        fields(minutes=1441),
+        fields(minutes=1.5),
+        fields(minutes=True),
+        fields(title=""),
+        fields(title="<b>x</b>"),
+        fields(attendees=["javascript:alert(1)"]),
+        {**fields(), "location": "x"},
+    ):
+        _rejects(_ex("event_preview", fields=bad))
+    _rejects(_ex("event_preview", conflicts=[{**conflict, "end": "noon"}]))
+    for state in ("draft", "created", "failed", "cancelled"):
+        validate_widget(_ex("event_preview", state=state, editable=False))
+    _rejects(_ex("event_preview", state="sent"))
+    _rejects(_ex("event_preview", approve={"label": "Go", "action_id": "evil.go"}))
+    _rejects(_ex("event_preview", editable="yes"))
+
+
+def test_day_planner_validation() -> None:
+    item = {"id": "p", "kind": "task", "title": "x", "done": False, "priority": "normal"}
+
+    def items(n: int) -> list[dict[str, Any]]:
+        return [{**item, "id": f"p{i}"} for i in range(n)]
+
+    validate_widget(_ex("day_planner", items=items(40)))
+    _rejects(_ex("day_planner", items=items(41)))
+    for bad in (
+        {**item, "kind": "meeting"},
+        {**item, "priority": "urgent"},
+        {**item, "time": "7pm"},
+        {**item, "time": "24:00"},
+        {**item, "id": "Has Space"},
+        {**item, "id": "a:b"},
+        {**item, "id": "x" * 41},
+        {**item, "title": "<img src=x>"},
+        {**item, "done": "no"},
+    ):
+        _rejects(_ex("day_planner", items=[bad]))
+    _rejects(_ex("day_planner", items=[item, item]))
+    _rejects(_ex("day_planner", date="2026-02-30"))
+    _rejects(_ex("day_planner", date="tomorrow"))
+    _rejects(_ex("day_planner", editable="yes"))
+    validate_widget(_ex("day_planner", items=[{**item, "time": "00:00"}]))
+
+
+def test_memory_list_validation() -> None:
+    row = {"key": "diet", "label": "Diet", "value": "veg"}
+
+    def rows(n: int) -> list[dict[str, Any]]:
+        return [{**row, "key": f"k{i}"} for i in range(n)]
+
+    validate_widget(_ex("memory_list", items=rows(30)))
+    _rejects(_ex("memory_list", items=rows(31)))
+    _rejects(_ex("memory_list", items=[row, row]))
+    for bad in (
+        {**row, "key": "Diet"},
+        {**row, "key": "a:b"},
+        {**row, "key": ""},
+        {**row, "value": "<b>"},
+    ):
+        _rejects(_ex("memory_list", items=[bad]))
+    bad_consent = _ex("memory_list")
+    bad_consent.pop("consent_text")
+    _rejects(bad_consent)
+    _rejects(_ex("memory_list", consent_text=""))
+    _rejects(_ex("memory_list", demo=True))  # memory_list has no demo property
+
+
+def test_addendum_action_ids() -> None:
+    for base in (
+        "task.approve",
+        "task.edit",
+        "task.view",
+        "email.open",
+        "email.reply",
+        "plan.toggle",
+        "plan.priority",
+        "plan.move",
+        "plan.add",
+        "memory.forget",
+        "memory.save",
+        "demo.next",
+    ):
+        assert base in ACTION_IDS and is_known_action(base)
+    assert is_known_action("task.approve:t1")
+    assert is_known_action("plan.move:p-1")
+    assert is_known_action("email.open:18c3F_a-1")  # mail ids keep their case
+    assert is_known_action("email.reply:" + "A" * 100)
+    assert not is_known_action("email.open:" + "A" * 101)
+    assert not is_known_action("email.open:a:b")
+    assert not is_known_action("task.approve:T1")  # other ids stay lowercase
+    assert not is_known_action("plan.toggle:" + "a" * 41)
+    assert not is_known_action("memory.forget:")
+
+
+# ------------------------------------------------------------ addendum builders
+HOSTILE = "<script>alert(1)</script>"
+JS = "javascript:alert(1)"
+RECEIVED = datetime(2026, 11, 9, 8, 30, tzinfo=UTC)
+
+
+def test_email_list_widget_sanitises_hostile_strings() -> None:
+    items = [
+        EmailItem(
+            "18c3F",
+            f"Mallory {HOSTILE}",
+            f"Win {JS} now",
+            f"<b>click</b> {JS}\nsecond line",
+            RECEIVED,
+            unread=True,
+            needs_reply=True,
+        ),
+        EmailItem("m2", "Asha", "Dinner", "Free tonight?", RECEIVED, important=True),
+    ]
+    wire = to_wire([email_list_widget(items, demo=True)])[0]
+    assert wire["id"] == "emails" and wire["demo"] is True
+    first = wire["items"][0]
+    for key in ("sender", "subject", "snippet"):
+        assert "<script" not in first[key] and "javascript:" not in first[key].lower()
+        assert "<b" not in first[key]
+    assert first["unread"] is True and first["needs_reply"] is True and first["important"] is False
+    assert first["received"] == RECEIVED.isoformat()
+    assert wire["items"][1]["important"] is True
+
+
+def test_email_list_widget_fails_closed() -> None:
+    with pytest.raises(GenUIError):
+        email_list_widget([EmailItem("bad id", "a", "b", "c", RECEIVED)], demo=False)
+    with pytest.raises(GenUIError):
+        email_list_widget([EmailItem("x" * 101, "a", "b", "c", RECEIVED)], demo=False)
+    many = [EmailItem(f"m{i}", "a", "b", "c", RECEIVED) for i in range(11)]
+    with pytest.raises(GenUIError):
+        email_list_widget(many, demo=False)
+    assert to_wire([email_list_widget([], demo=False)])[0]["items"] == []
+    with pytest.raises(TypeError):  # demo cannot be omitted
+        email_list_widget([])  # type: ignore[call-arg]
+
+
+def test_event_preview_widget() -> None:
+    fields = EventFields(
+        f"Dinner {HOSTILE}", "2026-11-09", "19:30", 90, ("asha@example.com", JS, "")
+    )
+    conflicts = [EventConflict(f"Standup {JS}", "19:00", "20:00")]
+    wire = to_wire(
+        [
+            event_preview_widget(
+                "t1",
+                fields=fields,
+                conflicts=conflicts,
+                state="draft",
+                detail=None,
+                demo=True,
+                editable=True,
+            )
+        ]
+    )[0]
+    assert wire["id"] == "event.t1"
+    assert wire["approve"]["action_id"] == "task.approve:t1"
+    assert wire["cancel"]["action_id"] == "task.cancel:t1"
+    assert "<script" not in wire["fields"]["title"]
+    assert all("javascript:" not in a.lower() for a in wire["fields"]["attendees"])
+    assert "" not in wire["fields"]["attendees"]
+    assert wire["conflicts"][0]["start"] == "19:00"
+    assert wire["demo"] is True and wire["editable"] is True and "detail" not in wire
+    done = to_wire(
+        [
+            event_preview_widget(
+                "t1", fields=fields, state="created", detail="Added to Google Calendar", demo=False
+            )
+        ]
+    )[0]
+    assert done["state"] == "created" and done["detail"] == "Added to Google Calendar"
+    assert done["editable"] is False and done["conflicts"] == []
+    with pytest.raises(GenUIError):
+        event_preview_widget("Bad Id", fields=fields, state="draft", demo=True)
+    with pytest.raises(GenUIError):
+        event_preview_widget(
+            "t1", fields=EventFields("x", "2026-13-01", "19:30", 30), state="draft", demo=True
+        )
+    with pytest.raises(GenUIError):
+        event_preview_widget(
+            "t1",
+            fields=EventFields("x", "2026-11-09", "19:30", 30, ("a",) * 11),
+            state="draft",
+            demo=True,
+        )
+
+
+def test_day_planner_widget() -> None:
+    items = [
+        PlannerItem("p1", "event", f"Standup {HOSTILE}", "10:00", priority="high", detail=JS),
+        PlannerItem("p2", "reminder", "Call mom", done=True),
+    ]
+    wire = to_wire([day_planner_widget(date="2026-11-09", items=items, demo=False, editable=True)])[
+        0
+    ]
+    assert wire["id"] == "planner" and wire["date"] == "2026-11-09" and wire["editable"] is True
+    assert "<script" not in wire["items"][0]["title"]
+    assert "javascript:" not in wire["items"][0].get("detail", "").lower()
+    assert wire["items"][0]["priority"] == "high" and "time" not in wire["items"][1]
+    with pytest.raises(GenUIError):
+        day_planner_widget(date="2026-11-09", items=[PlannerItem("A:b", "task", "x")], demo=False)
+    with pytest.raises(GenUIError):
+        day_planner_widget(
+            date="2026-11-09",
+            items=[PlannerItem(f"p{i}", "task", "x") for i in range(41)],
+            demo=False,
+        )
+    with pytest.raises(GenUIError):
+        day_planner_widget(date="tomorrow", items=[], demo=False)
+
+
+def test_memory_list_widget() -> None:
+    items = [MemoryItem("diet", "Diet", "vegetarian"), MemoryItem("home", f"Home {HOSTILE}", JS)]
+    wire = to_wire([memory_list_widget(items, consent_text="Kept only to personalise answers.")])[0]
+    assert wire["id"] == "memory" and wire["consent_text"].startswith("Kept")
+    assert "<script" not in wire["items"][1]["label"]
+    assert "javascript:" not in wire["items"][1]["value"].lower()
+    with pytest.raises(GenUIError):
+        memory_list_widget([MemoryItem("Bad Key", "x", "y")], consent_text="c")
+    with pytest.raises(GenUIError):
+        memory_list_widget([MemoryItem(f"k{i}", "x", "y") for i in range(31)], consent_text="c")
+
+
+def test_calendar_view_widget() -> None:
+    days = [
+        DayInput(
+            "2026-11-09",
+            (
+                DayEvent("e1", f"Standup {HOSTILE}", "10:00", "10:30"),
+                DayEvent("e2", "Dinner", "19:30", "21:00", detail=JS),
+            ),
+        ),
+        DayInput("2026-11-10"),
+    ]
+    wire = to_wire([calendar_view_widget(days, title="This week", demo=True)])[0]
+    assert wire["id"] == "calendar" and wire["demo"] is True and wire["title"] == "This week"
+    assert "<script" not in wire["days"][0]["events"][0]["title"]
+    assert wire["days"][1]["events"] == []
+    with pytest.raises(GenUIError):
+        calendar_view_widget([DayInput("2026-11-09", (DayEvent("e", "x", "9", "10"),))], demo=False)
+
+
+def test_composer_widget_states() -> None:
+    kwargs: dict[str, Any] = {
+        "channel": "email",
+        "to": f"asha@example.com {HOSTILE}",
+        "subject": f"Hi {JS}",
+        "body": "Hi Asha,\n\n\n\nShall we meet?\n<b>x</b> javascript:y\nThanks",
+        "demo": True,
+        "editable": True,
+    }
+    wire = to_wire([composer_widget("t7", state="draft", **kwargs)])[0]
+    assert wire["id"] == "composer.t7" and wire["send"]["action_id"] == "task.approve:t7"
+    assert wire["state"] == "draft" and wire["demo"] is True and wire["editable"] is True
+    assert "\n" in wire["body"] and "\n\n\n" not in wire["body"]
+    assert "<script" not in wire["to"] and "javascript:" not in wire["subject"].lower()
+    assert "<b" not in wire["body"] and "javascript:" not in wire["body"].lower()
+    for state in ("sent", "copied", "failed"):
+        w = to_wire([composer_widget("t7", state=state, detail="delivered", **kwargs)])[0]
+        assert w["state"] == state and w["detail"] == "delivered"
+    msg = to_wire(
+        [composer_widget("t8", channel="message", body="Hello", state="draft", demo=False)]
+    )[0]
+    assert "to" not in msg and "subject" not in msg and msg["editable"] is False
+    with pytest.raises(GenUIError):
+        composer_widget("Bad Id", channel="message", body="x", state="draft", demo=False)
+    with pytest.raises(TypeError):
+        composer_widget("t", channel="message", body="x", state="draft")  # type: ignore[call-arg]
+
+
+def test_task_board_builder_extensions() -> None:
+    tasks = [
+        TaskInput(
+            "a1",
+            "Email Asha",
+            "waiting_for_approval",
+            approvable=True,
+            viewable=True,
+            editable=True,
+        ),
+        TaskInput("a2", "Check", "running", cancellable=True),
+    ]
+    wire = to_wire([task_board_widget(tasks, demo=True, summary="1 of 2 waiting")])[0]
+    row = wire["tasks"][0]
+    assert row["approve_action_id"] == "task.approve:a1"
+    assert row["view_action_id"] == "task.view:a1" and row["edit_action_id"] == "task.edit:a1"
+    assert wire["demo"] is True and wire["summary"] == "1 of 2 waiting"
+    assert "approve_action_id" not in wire["tasks"][1]
+    flagged = (
+        TaskInput("Bad Id", "x", "pending", approvable=True),
+        TaskInput("Bad Id", "x", "pending", viewable=True),
+        TaskInput("Bad Id", "x", "pending", editable=True),
+    )
+    for bad in flagged:
+        with pytest.raises(GenUIError):
+            task_board_widget([bad], demo=False)
+    with pytest.raises(TypeError):
+        task_board_widget(tasks)  # type: ignore[call-arg]
+
+
+def test_clean_multiline() -> None:
+    assert clean_multiline("a  b\r\n\r\n\r\n\r\nc\t\x00d", 100) == "a b\n\nc d"
+    assert clean_multiline("java\nscript:alert(1)", 100).lower().count("javascript:") == 0
+    assert len(clean_multiline("x\n" * 100, 20)) <= 20
+    assert clean_multiline("anything", 0) == ""
+    validate_widget(_bad(text=clean_multiline("<b>hi</b>\njava\nscript:x", 100)))
