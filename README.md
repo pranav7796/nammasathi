@@ -119,6 +119,7 @@ Add `?timings=1` to the page address to see these for each turn.
 | Speech | Gnani Prisma (recognition) and Timbre (voice) |
 | Understanding | Groq, then Gemini, with a strict Pydantic schema |
 | Swiggy | Official MCP SDK over Streamable HTTP; OAuth 2.1 with PKCE and Dynamic Client Registration |
+| Everyday features | Spoken reminders and notes, a waitlist, a widget engine, share and calendar buttons; reminders do not alert yet. See [docs/everyday-features.md](docs/everyday-features.md) |
 | Deployment | Docker on Render's free plan, mock shops only; see [docs/deployment.md](docs/deployment.md) |
 | Quality | pytest (704 tests), Node tests for the page (17), ruff, pyright, GitHub Actions |
 

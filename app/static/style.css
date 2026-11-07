@@ -322,3 +322,13 @@ html { scroll-padding-top: 170px; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .voice-wave i { height: 60%; }
 }
+
+.waitlist-section { max-width: 620px; margin: 28px auto 8px; padding: 22px clamp(16px, 3vw, 28px); border-radius: 22px; background: var(--panel); box-shadow: var(--shadow); }
+.waitlist-section h2 { margin-bottom: 8px; font-size: 1.5rem; color: var(--teal-dark); }
+.waitlist-section > p { margin-bottom: 14px; color: var(--muted); }
+
+.genui-inline:empty { display: none; }
+.genui-inline { margin-bottom: 14px; }
+
+/* The waitlist belongs to the home screen only. */
+.home-panel[hidden] ~ .waitlist-section { display: none !important; }

@@ -284,6 +284,9 @@ Choose the relevant role for each task:
 `app/assistant/` routes turns between capabilities and owns no commerce logic. Groceries and
 food share `app/orchestrator/`, differing only by adapter (`app/commerce/`, `app/food/`).
 Table booking is `app/dining/`. All share one journal, `app/commerce/order_journal.py`.
+Widgets are `app/genui/` (server builds and validates, browser only draws; see `docs/genui-spec.md`),
+reminders and notes are `app/personal/`, and the waitlist is `app/waitlist.py`. None of them give the
+LLM a tool: see `docs/everyday-features.md`.
 Do not build a generic agent framework or give the LLM tools.
 
 The current `pyproject.toml` configures Pyright to include `app` and

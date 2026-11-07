@@ -510,7 +510,14 @@ async def test_a_first_version_database_is_upgraded_in_place(tmp_path: Path) -> 
     store = AccountStore(database)
     user = store.create_user("early@example.com", "x")
     with database.transaction() as tx:
-        for table in ("demo_orders", "conversation_turns", "user_preferences"):
+        for table in (
+            "notes",
+            "reminders",
+            "waitlist_entries",
+            "demo_orders",
+            "conversation_turns",
+            "user_preferences",
+        ):
             tx.execute(f"DROP TABLE {table}")
         tx.execute("UPDATE schema_version SET version = 1")
     migrate(database)

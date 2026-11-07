@@ -10,8 +10,13 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Baloo+Tamma+2:wght@600;700&family=Noto+Sans:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;500;700&family=Noto+Sans+Kannada:wght@400;500;700&display=swap">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/waitlist.css">
+    <link rel="stylesheet" href="/static/genui.css">
+    <script src="/static/genui.js" defer></script>
     <script src="/static/app.js" defer></script>
     <script src="/static/account.js" defer></script>
+    <script src="/static/waitlist.js" defer></script>
+    <script src="/static/personal.js" defer></script>
   </head>
   <body>
     <svg class="icon-sprite" width="0" height="0" aria-hidden="true">
@@ -25,6 +30,7 @@
         <div class="brand-mark" aria-hidden="true">ಸ</div>
         <div class="brand-copy"><h1>Namma Saathi</h1><p>Your personal AI for everyday life</p></div>
         <p id="commerce-badge" class="demo-badge">Demo order</p>
+        <button id="personal-button" class="account-button" type="button" hidden>Reminders</button>
         <button id="account-button" class="account-button" type="button" hidden>Sign in</button>
       </header>
 
@@ -79,6 +85,12 @@
         </div>
       </section>
 
+      <section id="waitlist" class="waitlist-section" aria-labelledby="waitlist-heading" hidden>
+        <h2 id="waitlist-heading">Want the real thing?</h2>
+        <p>Today Saathi practises on demo shops. Real Swiggy ordering opens once Swiggy approves it. Leave your email and I'll tell you when it's ready.</p>
+        <div id="waitlist-mount"></div>
+      </section>
+
       <section id="conversation" class="conversation" aria-label="Your conversation with Saathi" hidden>
         <section id="tasks-panel" class="tasks-panel" aria-label="What Saathi is holding for you" hidden>
           <p class="tasks-title">Your tasks <span id="tasks-mode" class="tasks-mode"></span></p>
@@ -111,6 +123,8 @@
               <p class="confirmation-intro">Tap one, or say first, second, or third.</p>
               <div id="options-list" class="option-grid"></div>
             </section>
+
+            <div id="genui-inline" class="genui-inline" aria-live="polite"></div>
 
             <section id="order-panel" class="panel order-panel" aria-labelledby="order-heading" role="status" hidden>
               <h2 id="order-heading">Your order</h2>
@@ -173,6 +187,16 @@
       <p id="page-status" class="page-status" role="status" aria-live="polite"></p>
       <p id="timings" class="small-note timings" hidden></p>
     </main>
+
+    <dialog id="personal-dialog" class="account-dialog" aria-labelledby="personal-title">
+      <div class="account-head">
+        <h2 id="personal-title">Reminders and notes</h2>
+        <button id="personal-close" class="text-button" type="button">Close</button>
+      </div>
+      <p class="small-note">Saved reminders appear here. Saathi can't alert you yet, so check this list.</p>
+      <p id="personal-error" class="error-message" role="alert" hidden></p>
+      <div id="personal-widgets" aria-live="polite"></div>
+    </dialog>
 
     <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-title">
       <div class="account-head">

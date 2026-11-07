@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Namma Saathi GenUI demo (not served by the app)</title>
+  <link rel="stylesheet" href="../app/static/style.css">
+  <link rel="stylesheet" href="../app/static/genui.css">
+  <style>body { padding: 12px; } main { max-width: 760px; margin: 0 auto; } #log { font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }</style>
+</head>
+<body>
+  <main>
+    <h1>GenUI demo</h1>
+    <p>Static visual check page. Actions are only logged below; nothing is sent.</p>
+    <div id="host"></div>
+    <h2>onAction log</h2>
+    <pre id="log" aria-live="polite"></pre>
+  </main>
+  <script src="../app/static/genui.js"></script>
+  <script>
+    window.actions = [];
+    window.demoWidgets = [
+      { id: "h1", type: "heading", text: "Your day", level: 1 },
+      { id: "t1", type: "text", text: "Here is what Namma Saathi found for you.", tone: "muted" },
+      { id: "t2", type: "text", text: "This basket is a demo. Nothing is ordered.", tone: "warning" },
+      { id: "card1", type: "card", title: "Weekend plan", body: "A card can hold other widgets.",
+        children: [
+          { id: "card1.t", type: "text", text: "Nested text inside a card.", tone: "normal" },
+          { id: "card1.p", type: "progress", label: "Packing", value: 40 },
+        ],
+        actions: [{ label: "Looks good", action_id: "card.ok", style: "primary" }, { label: "Skip", action_id: "card.skip" }] },
+      { id: "list1", type: "list", title: "Nearby", items: [
+          { id: "a", title: "Dosa Corner", detail: "Indiranagar, 1.2 km", badge: "Open" },
+          { id: "b", title: "Filter Coffee House", detail: "A very long line of detail text that should wrap nicely on a narrow phone screen without overflowing" } ], empty_text: "Nothing" },
+      { id: "panel1", type: "action_panel", title: "What next?", actions: [
+          { label: "Order groceries", action_id: "go.groceries", style: "primary" },
+          { label: "Book a table", action_id: "go.dining" }, { label: "Clear", action_id: "go.clear", style: "danger" } ] },
+      { id: "form1", type: "form", title: "Book a table", submit: { label: "Find tables", action_id: "dining.search", style: "primary" }, fields: [
+          { name: "restaurant", label: "Restaurant", kind: "text", required: true, value: "", max_length: 40, help: "At most 40 characters" },
+          { name: "notes", label: "Notes", kind: "textarea", value: "" },
+          { name: "party", label: "Party size", kind: "number", required: true, min: 1, max: 12, value: 2 },
+          { name: "area", label: "Area", kind: "select", options: [{ value: "ind", label: "Indiranagar" }, { value: "kor", label: "Koramangala" }], value: "ind" },
+          { name: "day", label: "Date", kind: "date", value: "2026-11-09" },
+          { name: "at", label: "Time", kind: "time", value: "19:30" },
+          { name: "outdoor", label: "Outdoor seating", kind: "checkbox", value: false } ] },
+      { id: "tasks1", type: "task_board", title: "Tasks", tasks: [
+          { id: "k1", title: "Search groceries", status: "completed" },
+          { id: "k2", title: "Check table availability", status: "running", detail: "Asking the restaurant", cancel_action_id: "task.cancel.k2" },
+          { id: "k3", title: "Send reminder", status: "failed", detail: "Network problem", retry_action_id: "task.retry.k3" },
+          { id: "k4", title: "Pay", status: "waiting_for_approval" },
+          { id: "k5", title: "Old task", status: "cancelled" },
+          { id: "k6", title: "Queued", status: "pending" },
+          { id: "k7", title: "Needs a choice", status: "waiting_for_input" } ] },
+      { id: "prog1", type: "progress", label: "Finding your order", value: 65 },
+      { id: "cart1", type: "cart", title: "Your basket", demo: true, editable: true, total_inr: "292.00", fees_inr: "15.00", lines: [
+          { id: "l1", name: "Sona Masoori Rice", detail: "1 kg", quantity: 2, unit_price_inr: "78.00" },
+          { id: "l2", name: "Amul Taaza Toned Milk with a long product name for wrapping", detail: "500 ml", quantity: 1, unit_price_inr: "27.00" } ] },
+      { id: "table1", type: "table", title: "Bill split", columns: ["Name", "Item", "Amount"], rows: [["Asha", "Dosa", "90.00"], ["Ravi", "Coffee", "40.00"]] },
+      { id: "conf1", type: "confirmation", title: "Place this order?", demo: true,
+        details: [{ label: "Items", value: "2 x Sona Masoori Rice" }, { label: "Total", value: "Rs 156.00" }, { label: "Deliver to", value: "Home" }],
+        consequence: "If you say yes, the demo order is placed. Nothing real is ordered.",
+        confirm: { label: "Yes, place it", action_id: "order.confirm", style: "primary" }, reject: { label: "No, go back", action_id: "order.reject" } },
+      { id: "comp1", type: "composer", channel: "email", to: "asha@example.com", subject: "Dinner on Saturday", body: "Hi Asha,\n\nShall we meet at 7:30 pm on Saturday?\n\nThanks", send: { label: "Send draft", action_id: "compose.send", style: "primary" }, copy_enabled: true },
+      { id: "cal1", type: "calendar_view", title: "This week", days: [
+          { date: "2026-11-09", events: [{ id: "e1", title: "Standup", start: "10:00", end: "10:30" }, { id: "e2", title: "Dinner with Asha", start: "19:30", end: "21:00", detail: "Toit, Indiranagar" }] },
+          { date: "2026-11-10", events: [] },
+          { date: "2026-11-11", events: [{ id: "e3", title: "Dentist", start: "09:00", end: "10:00" }] } ] },
+      { id: "rem1", type: "reminder_list", title: "Reminders", items: [
+          { id: "r1", text: "Pay electricity bill", due: "2020-01-01T09:00:00+05:30", done: false },
+          { id: "r2", text: "Call Ajji", due: "2099-01-01T18:00:00+05:30", done: false },
+          { id: "r3", text: "Buy flowers", due: null, done: true } ] },
+      { id: "notes1", type: "note_list", title: "Notes", items: [{ id: "n1", body: "Ragi flour from the Saturday market.\nAsk about jaggery.", updated: "2026-11-05T10:00:00+05:30" }] },
+      { id: "stat1", type: "status", kind: "loading", message: "Checking availability" },
+      { id: "stat2", type: "status", kind: "success", message: "Table booked (demo)" },
+      { id: "stat3", type: "status", kind: "empty", message: "No saved addresses" },
+      { id: "stat4", type: "status", kind: "error", message: "Could not reach the restaurant", retry: { label: "Try again", action_id: "status.retry", style: "primary" } },
+      { id: "share1", type: "share_panel", title: "Share this plan", summary: "Dinner with Asha, Monday 9 Nov, 7:30 pm at Toit, Indiranagar.",
+        calendar: { title: "Dinner, with Asha; Toit", start: "2026-11-09T19:30:00+05:30", end: "2026-11-09T21:00:00+05:30", location: "Toit, Indiranagar, Bengaluru", description: "Booked by Namma Saathi" } },
+    ];
+    window.demoOnAction = function (a) {
+      window.actions.push(a);
+      document.getElementById("log").textContent = window.actions.map(function (x) { return JSON.stringify(x); }).join("\n");
+    };
+    // The contract allows 12 widgets per reply, so the demo renders in several replies.
+    for (var i = 0; i < window.demoWidgets.length; i += 12) {
+      window.saathiGenUI.render(document.getElementById("host"), window.demoWidgets.slice(i, i + 12), { onAction: window.demoOnAction });
+    }
+  </script>
+</body>
+</html>

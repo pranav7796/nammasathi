@@ -182,7 +182,10 @@
   }
 
   function render() {
+    window.dispatchEvent(new CustomEvent("saathi:me", { detail: me }));
     accountButton.hidden = !me.enabled;
+    const waitlist = document.querySelector("#waitlist");
+    if (waitlist) waitlist.hidden = !me.enabled || me.available === false;
     accountsNotice.hidden = me.available !== false;
     accountsNotice.textContent = me.message || "";
     if (!me.enabled || me.available === false) {

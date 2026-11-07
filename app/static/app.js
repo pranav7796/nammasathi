@@ -385,6 +385,7 @@ function renderReply(data) {
   }
   assistantNode.textContent = data.assistant_text || "I am ready for your next turn.";
   renderCart(data);
+  window.saathiShowWidgets?.(data.ui);
   if (data.commerce_mode === "swiggy") window.saathiAccountRefresh?.();
   scriptedNote.hidden = data.scripted_understanding !== true;
   if (SHOW_TIMINGS && data.timings_ms) {

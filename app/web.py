@@ -12,7 +12,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from secrets import token_urlsafe
@@ -60,12 +60,20 @@ from app.commerce.swiggy import SwiggyMcpClient
 from app.config import Settings, load_settings
 from app.dining.base import DiningAdapter
 from app.dining.workflow import DiningWorkflow
+from app.genui.builders import CalendarInput, share_panel_widget
+from app.genui.models import Widget
+from app.genui.validate import GenUIError, to_wire
 from app.llm.chain import SCRIPTED, build_extractor
 from app.llm.extractor import IntentExtractionError
 from app.oauth_web import callback_url, oauth_router
 from app.observability import configure_logging, log_event
 from app.orchestrator.state_machine import Money, Say
 from app.orchestrator.turn_runner import IntentExtractor, TextTurnRunner
+from app.personal import voice as reminder_voice
+from app.personal.dates import IST
+from app.personal.routes import personal_router
+from app.personal.service import PersonalService, WriteLimited
+from app.personal.store import PersonalError
 from app.timing import TurnTimer, begin_turn, stage
 from app.voice.gnani import (
     DEFAULT_VOICES,
@@ -75,6 +83,7 @@ from app.voice.gnani import (
     TimbreTTS,
 )
 from app.voice.presentation import response_text, speech_error_text
+from app.waitlist import waitlist_router
 
 MAX_AUDIO_BYTES = 12 * 1024 * 1024
 MAX_TYPED_CHARACTERS = 400
@@ -244,6 +253,8 @@ def create_app(
     application.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     application.include_router(oauth_router(oauth_transport))
     application.include_router(account_router())
+    application.include_router(waitlist_router())
+    application.include_router(personal_router())
 
     async def close_user_conversations(user_id: str) -> None:
         """After sign-out, disconnect, or deletion nothing of this user's may keep running."""
@@ -422,6 +433,31 @@ def create_app(
                 detail="This public demo has used its allowance for today. Please try tomorrow.",
             )
 
+    personal_services: dict[int, PersonalService] = {}
+
+    async def reminder_turn(
+        request: Request, entry: BrowserSession, text: str
+    ) -> tuple[str, list[Widget]] | None:
+        """Handles "remind me ..." itself. Not stored in conversation history: it is private."""
+        wording = reminder_voice.reminder_request(text)
+        if wording is None:
+            return None
+        accounts = accounts_of(request)
+        user_id = entry.owner
+        if accounts is None or user_id is None:
+            return reminder_voice.sign_in_text(entry.language), []
+        personal = personal_services.setdefault(id(accounts), PersonalService(accounts))
+        try:
+            saved = await personal.create_reminder_from_text(user_id, wording)
+            everything = await personal.list_reminders(user_id)
+        except (AccountsUnavailable, PersonalError, WriteLimited):
+            return reminder_voice.unavailable_text(entry.language), []
+        log_event("personal", op="voice_reminder", outcome="saved")
+        return (
+            reminder_voice.reply_text(entry.language, saved),
+            reminder_voice.reminders_ui(everything[:50]),
+        )
+
     async def run_turn(
         request: Request,
         entry: BrowserSession,
@@ -430,6 +466,20 @@ def create_app(
         text: str,
     ) -> dict[str, object]:
         runtime_settings = entry.settings
+        spoken_reminder = await reminder_turn(request, entry, text)
+        if spoken_reminder is not None:
+            message, widgets = spoken_reminder
+            return await _response_payload(
+                entry,
+                None,
+                runtime_settings,
+                tts_factory,
+                session_id=session_id,
+                transcript=text,
+                timer=timer,
+                message_override=message,
+                ui=widgets,
+            )
         reply = await entry.assistant.turn(text, heard=_heard_readback(request, runtime_settings))
         result = await _response_payload(
             entry,
@@ -980,22 +1030,74 @@ def _session_payload(
     }
 
 
+def _share_widgets(entry: BrowserSession, settings: Settings) -> list[Widget]:
+    """Share and calendar buttons once an order or booking is DONE. Nothing is sent by the app.
+
+    A demo is labelled as one in the text itself, because the text travels beyond this screen.
+    A live result is offered only when Swiggy's own history verified it.
+    """
+    view = entry.assistant.view()
+    if view.state != "DONE":
+        return []
+    demo = settings.commerce_backend == "mock"
+    if not demo and not view.order_verified:
+        return []
+    try:
+        if view.domain == "dining":
+            workflow = entry.assistant.workflows.get("dining")
+            session = getattr(workflow, "session", None)
+            if (
+                session is None
+                or session.restaurant is None
+                or not session.date
+                or not session.time
+            ):
+                return []
+            start = datetime.fromisoformat(f"{session.date}T{session.time}").replace(tzinfo=IST)
+            label = "Demo booking (not a real reservation)" if demo else "Table booking"
+            summary = (
+                f"{label}: {session.restaurant.name}, {session.date} at {session.time}, "
+                f"{session.guests} guests."
+            )
+            calendar = CalendarInput(
+                title=f"{'Demo: ' if demo else ''}Dinner at {session.restaurant.name}",
+                start=start,
+                end=start + timedelta(minutes=90),
+                location=session.restaurant.area or None,
+                description=summary,
+            )
+            return [share_panel_widget(summary, calendar)]
+        items = ", ".join(f"{line.quantity} x {line.name}" for line in view.lines)
+        label = "Demo order (not a real order)" if demo else "Swiggy order"
+        total = _money_json(view.total_inr)
+        return [share_panel_widget(f"{label}: {items}. Total Rs. {total}.")]
+    except (GenUIError, ValueError, TypeError):
+        return []
+
+
 async def _response_payload(
     entry: BrowserSession,
-    reply: Reply,
+    reply: Reply | None,
     settings: Settings,
     tts_factory: TTSFactory | None,
     *,
     session_id: str,
     transcript: str | None = None,
     timer: TurnTimer | None = None,
+    message_override: str | None = None,
+    ui: list[Widget] | None = None,
 ) -> dict[str, object]:
-    message = response_text(
-        reply.effects,
-        language=entry.language,
-        commerce_mode=settings.commerce_backend,
-        domain=reply.domain or "grocery",
-    )
+    """`message_override` and `ui` serve turns the ordering assistant did not handle."""
+    if message_override is not None:
+        message = message_override
+    else:
+        assert reply is not None
+        message = response_text(
+            reply.effects,
+            language=entry.language,
+            commerce_mode=settings.commerce_backend,
+            domain=reply.domain or "grocery",
+        )
     if message:
         entry.last_reply = message  # survives a lost response, e.g. after a placed order
     audio_base64: str | None = None
@@ -1025,6 +1127,13 @@ async def _response_payload(
             "audio_error": audio_error,
         }
     )
+    if ui is None and reply is not None:
+        ui = _share_widgets(entry, settings)
+    if ui:
+        try:
+            result["ui"] = to_wire(ui)
+        except GenUIError:
+            log_event("genui", outcome="rejected")  # the reply still goes out without the widget
     if timer is not None:
         timings = timer.report()
         log_event(

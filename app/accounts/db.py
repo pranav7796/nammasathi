@@ -91,6 +91,37 @@ _MIGRATIONS: tuple[tuple[str, ...], ...] = (
         )""",
         "CREATE INDEX demo_orders_user ON demo_orders(user_id, created_at)",
     ),
+    (
+        # People who asked to be told when live ordering opens. No account needed. Email is stored
+        # lower-cased and unique, so a repeat sign-up is recognised, not duplicated.
+        """CREATE TABLE waitlist_entries (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            interests TEXT NOT NULL,
+            language TEXT NOT NULL,
+            consent_text TEXT NOT NULL,
+            created_at BIGINT NOT NULL
+        )""",
+        # A person's own reminders and notes. due_at and done_at are epoch milliseconds.
+        """CREATE TABLE reminders (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            text TEXT NOT NULL,
+            due_at BIGINT,
+            done_at BIGINT,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )""",
+        "CREATE INDEX reminders_user ON reminders(user_id, due_at)",
+        """CREATE TABLE notes (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            body TEXT NOT NULL,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )""",
+        "CREATE INDEX notes_user ON notes(user_id, updated_at)",
+    ),
 )
 
 
