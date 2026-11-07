@@ -24,6 +24,7 @@ from app.google.calendar import GoogleCalendarClient
 from app.google.gmail import GmailClient
 from app.google.oauth import GoogleOAuth
 from app.integrations.base import IntegrationError, NotConnected, ReauthRequired
+from app.twilio_whatsapp import mask, phone_for_user
 from app.whatsapp.client import WhatsAppClient
 
 NOTE_SECONDS = 24 * 3600
@@ -228,6 +229,60 @@ async def _whatsapp_card(settings: Settings, whatsapp: WhatsAppClient | None) ->
     return card
 
 
+async def _twilio_card(user: User, accounts: AccountService) -> dict[str, Any]:
+    """WhatsApp through Twilio: a number is linked only after it sent this person's code itself."""
+    settings = accounts.settings
+    card: dict[str, Any] = {
+        "id": "twilio",
+        "name": "WhatsApp (Twilio)",
+        "description": "Message Namma Saathi from your own WhatsApp, through Twilio's number.",
+        "permissions": [
+            "Read the messages you send to Saathi's WhatsApp number, from your linked number only",
+            "Reply in that chat. Anything that changes something still needs your confirm.",
+        ],
+        "account": None,
+        "last_connected": None,
+        "setup": [],
+        "can_connect": False,
+        "can_disconnect": False,
+        "can_check": False,
+        "notes": [
+            "With Twilio's sandbox, first send the sandbox join code from your phone.",
+            "Groceries, food and tables stay on the website.",
+        ],
+    }
+    missing = [
+        name
+        for name, value in (
+            ("TWILIO_AUTH_TOKEN", settings.twilio_auth_token),
+            ("PUBLIC_BASE_URL", settings.public_base_url),
+        )
+        if not value
+    ]
+    if missing:
+        card.update(
+            state="configuration_required",
+            detail="The site's owner needs to add Twilio details before numbers can be linked.",
+            setup=missing,
+        )
+        return card
+    phone = await accounts.run(phone_for_user, accounts.database, user.id)
+    if phone is None:
+        card.update(
+            state="not_connected",
+            detail="Not linked. Press Link, then send the code from your WhatsApp.",
+            can_connect=True,
+        )
+    else:
+        card.update(
+            state="connected",
+            detail="Linked: your number proved it by sending your code.",
+            account=mask(phone),
+            can_disconnect=True,
+        )
+    return card
+
+
 async def _swiggy_card(user: User, accounts: AccountService) -> dict[str, Any]:
     refusal = await accounts.live_refusal(user)
     connected = await accounts.tokens.connected(user.id)
@@ -291,5 +346,6 @@ async def collect(
             transport,
         ),
         await _whatsapp_card(accounts.settings, whatsapp),
+        await _twilio_card(user, accounts),
         await _swiggy_card(user, accounts),
     ]

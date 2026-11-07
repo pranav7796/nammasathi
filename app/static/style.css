@@ -368,7 +368,7 @@ audio { display: block; width: 100%; height: 40px; margin-top: 10px; }
 .app-tile svg { width: 26px; height: 26px; }
 .app-tile[data-app="gmail"] { background: #fbe9e6; color: #b3402c; }
 .app-tile[data-app="calendar"] { background: var(--blue-tint); color: var(--blue); }
-.app-tile[data-app="whatsapp"] { background: var(--green-tint); color: var(--green); }
+.app-tile[data-app="whatsapp"], .app-tile[data-app="twilio"] { background: var(--green-tint); color: var(--green); }
 .app-tile[data-app="swiggy"] { background: #fdebd5; color: #c4620a; }
 .app-name { min-width: 0; }
 .app-name h3 { margin: 0; font-family: var(--sans); font-size: 1.02rem; }

@@ -87,3 +87,34 @@ value list, and the signature page's wording (standard HMAC-SHA256 over the raw 
 
 Meeting invitations: an event with attendees sends Google invitations by email, and the approval
 card says so. Events without attendees send nothing.
+
+## WhatsApp through Twilio (inbound)
+
+Lets a person message Namma Saathi from their own WhatsApp. Implemented and tested against signed
+test posts and Twilio's own documented signature example; **not yet tried with real Twilio.**
+
+**Webhook:** `PUBLIC_BASE_URL/api/twilio/whatsapp`, method **POST**. For the live site:
+`https://namma-saathi-7b62.onrender.com/api/twilio/whatsapp` (this exists only once the branch is
+deployed and the settings below are set; until then that address returns 404).
+
+Settings (server environment only, never in git):
+
+```
+TWILIO_ACCOUNT_SID=AC...             # requests for any other account are refused
+TWILIO_AUTH_TOKEN=...                # verifies X-Twilio-Signature on every request
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886   # the sandbox number, shown to people when linking
+PUBLIC_BASE_URL=https://namma-saathi-7b62.onrender.com
+```
+
+`PUBLIC_BASE_URL` must match the webhook address exactly: the signature covers the full URL.
+
+In Twilio: **Messaging > Try it out > Send a WhatsApp message > Sandbox settings**, set
+**When a message comes in** to the webhook above, method **POST**, and save. From your phone, send the
+sandbox's `join <code>` message to the sandbox number first.
+
+Linking: sign in, open **Apps > WhatsApp (Twilio) > Link my WhatsApp**, then send the shown
+`link ABC123` from your phone within 15 minutes. Only a linked number can act on an account, and only
+on its own. Replies come back in the same chat (TwiML), within Twilio's and WhatsApp's 24-hour window.
+Email, calendar, reminders, WhatsApp drafts and the day plan work over WhatsApp; anything that changes
+something still needs "send it", the read-back, and "confirm". Groceries, food and tables stay on the
+website.

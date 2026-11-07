@@ -89,6 +89,7 @@ from app.tasks.routes import tasks_router
 from app.tasks.services import ServiceHub
 from app.tasks.store import TaskStore
 from app.timing import TurnTimer, begin_turn, stage
+from app.twilio_whatsapp import twilio_router
 from app.voice.gnani import (
     DEFAULT_VOICES,
     SUPPORTED_LANGUAGES,
@@ -318,6 +319,7 @@ def create_app(
     application.include_router(integrations_router())
     application.include_router(myday_router())
     application.include_router(whatsapp_router())
+    application.include_router(twilio_router())
     application.include_router(memory_router())
     application.include_router(tasks_router())
 

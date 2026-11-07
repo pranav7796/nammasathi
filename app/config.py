@@ -76,10 +76,18 @@ class Settings:
     whatsapp_app_secret: str | None = field(default=None, repr=False)
     whatsapp_verify_token: str | None = field(default=None, repr=False)
     whatsapp_graph_version: str = "v21.0"
+    # Twilio's WhatsApp (sandbox or a Twilio number): inbound messages arrive as signed webhooks.
+    twilio_account_sid: str = ""
+    twilio_auth_token: str | None = field(default=None, repr=False)
+    twilio_whatsapp_from: str = ""  # the number people message, e.g. whatsapp:+14155238886
 
     @property
     def google_configured(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret and self.public_base_url)
+
+    @property
+    def twilio_configured(self) -> bool:
+        return bool(self.twilio_auth_token and self.public_base_url)
 
     @property
     def whatsapp_configured(self) -> bool:
@@ -251,6 +259,9 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         whatsapp_app_secret=values.get("WHATSAPP_APP_SECRET") or None,
         whatsapp_verify_token=values.get("WHATSAPP_VERIFY_TOKEN") or None,
         whatsapp_graph_version=values.get("WHATSAPP_GRAPH_VERSION", "v21.0").strip() or "v21.0",
+        twilio_account_sid=values.get("TWILIO_ACCOUNT_SID", "").strip(),
+        twilio_auth_token=values.get("TWILIO_AUTH_TOKEN") or None,
+        twilio_whatsapp_from=values.get("TWILIO_WHATSAPP_FROM", "").strip(),
         llm_primary=llm_primary,
         llm_timeout_seconds=llm_timeout,
         demo_understanding=demo_understanding,

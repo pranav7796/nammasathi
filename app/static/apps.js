@@ -7,7 +7,7 @@
   const badge = document.querySelector("#apps-count");
   if (!dialog || !grid || !opener) return;
 
-  const ICON = { gmail: "mail", calendar: "calendar", whatsapp: "chat", swiggy: "bag" };
+  const ICON = { gmail: "mail", calendar: "calendar", whatsapp: "chat", twilio: "chat", swiggy: "bag" };
   const LABEL = {
     connected: "Connected",
     not_connected: "Not connected",
@@ -98,13 +98,18 @@
 
     const actions = el("div", "app-actions");
     if (app.can_connect) {
-      const connect = el("button", "primary", app.state === "authorization_failed" ? "Connect again" : "Connect");
+      const label = app.id === "twilio" ? "Link my WhatsApp" : app.state === "authorization_failed" ? "Connect again" : "Connect";
+      const connect = el("button", "primary", label);
       connect.type = "button";
       connect.addEventListener("click", () => start(app));
       actions.append(connect);
     }
     if (app.can_disconnect) {
-      const off = el("button", "secondary-button", app.id === "swiggy" ? "Manage" : "Disconnect");
+      const off = el(
+      "button",
+      "secondary-button",
+      app.id === "swiggy" ? "Manage" : app.id === "twilio" ? "Unlink" : "Disconnect",
+    );
       off.type = "button";
       off.addEventListener("click", () => stop(app));
       actions.append(off);
@@ -115,7 +120,7 @@
 
   function placeholders() {
     grid.replaceChildren();
-    for (const [id, name] of [["gmail", "Gmail"], ["calendar", "Google Calendar"], ["whatsapp", "WhatsApp Business"], ["swiggy", "Swiggy"]]) {
+    for (const [id, name] of [["gmail", "Gmail"], ["calendar", "Google Calendar"], ["whatsapp", "WhatsApp Business"], ["twilio", "WhatsApp (Twilio)"], ["swiggy", "Swiggy"]]) {
       grid.append(card({ id, name, description: "", state: "loading" }));
     }
   }
@@ -133,6 +138,20 @@
   }
 
   async function start(app) {
+    if (app.id === "twilio") {
+      try {
+        const link = await call("/api/twilio/link", "POST");
+        await window.saathiConfirm(
+          "Link your WhatsApp",
+          `From your phone, send this WhatsApp message to ${link.send_to || "Saathi's number"}: \u201c${link.message}\u201d. The code works once, for 15 minutes.`,
+          "I've sent it",
+        );
+      } catch (error) {
+        window.saathiToast?.(error.message, "error");
+      }
+      await load();
+      return;
+    }
     if (app.id === "swiggy") {
       dialog.close();
       window.saathiOpenAccount?.();
@@ -147,6 +166,22 @@
   }
 
   async function stop(app) {
+    if (app.id === "twilio") {
+      const sure = await window.saathiConfirm(
+        "Unlink your WhatsApp?",
+        "Messages from your number will no longer reach your account. You can link it again any time.",
+        "Unlink",
+      );
+      if (!sure) return;
+      try {
+        await call("/api/twilio/unlink", "POST");
+        window.saathiToast?.("Your WhatsApp number is unlinked.", "success");
+      } catch (error) {
+        window.saathiToast?.(error.message, "error");
+      }
+      await load();
+      return;
+    }
     if (app.id === "swiggy") {
       dialog.close();
       window.saathiOpenAccount?.();

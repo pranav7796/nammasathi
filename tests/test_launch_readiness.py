@@ -511,6 +511,7 @@ async def test_a_first_version_database_is_upgraded_in_place(tmp_path: Path) -> 
     user = store.create_user("early@example.com", "x")
     with database.transaction() as tx:
         for table in (
+            "whatsapp_links",
             "whatsapp_messages",
             "contacts",
             "memory_items",

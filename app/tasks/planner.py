@@ -67,8 +67,39 @@ def _clean_dependencies(raw: object, index: int, alive: dict[int, int]) -> tuple
     return tuple(result)
 
 
+_CONTENT = {
+    "whatsapp.send": "body",
+    "gmail.send": "body",
+    "gmail.draft_reply": "intent",
+    "reminder.create": "text",
+}
+_WORD = re.compile(r"[\w\u0900-\u097f\u0c80-\u0cff]+")
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in _WORD.findall(text.casefold()) if len(w) > 1}
+
+
+def _said(content: str, user_text: str) -> bool:
+    """Most of the words of a message must be words the person used: the model may not write it."""
+    words = _words(content)
+    if not words:
+        return False
+    heard = _words(user_text)
+    return len(words & heard) * 2 >= len(words)
+
+
 def _provenance_ok(kind: str, args: dict[str, object], user_text: str) -> bool:
-    """An email address in a task must be one the person actually said or typed."""
+    """Addresses and message words in a task must be ones the person actually said or typed.
+
+    A model asked to plan "WhatsApp Amma" may write a message for her. That would be words put in the
+    person's mouth, so such a task is dropped and the rules ask what to say instead.
+    """
+    field = _CONTENT.get(kind)
+    if field is not None:
+        content = args.get(field)
+        if isinstance(content, str) and not _said(content, user_text):
+            return False
     if kind not in {"gmail.send", "calendar.create"}:
         return True
     key = "to" if kind == "gmail.send" else "attendees"

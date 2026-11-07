@@ -193,6 +193,16 @@ _MIGRATIONS: tuple[tuple[str, ...], ...] = (
         )""",
         "CREATE INDEX whatsapp_user ON whatsapp_messages(user_id, created_at)",
     ),
+    (
+        # Which WhatsApp number belongs to which person, so an inbound message reaches that person's
+        # own tasks and nobody else's. One number per person. Set only after the number itself sent
+        # the person's one-time link code.
+        """CREATE TABLE whatsapp_links (
+            phone TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            created_at BIGINT NOT NULL
+        )""",
+    ),
 )
 
 
