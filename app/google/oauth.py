@@ -417,6 +417,11 @@ class GoogleOAuth:
             raise InvalidState("This sign-in link is not valid any more. Please start again.")
         return pending
 
+    def service_for_state(self, user_id: str, state: str) -> str | None:
+        """Which service a pending sign-in is for, if the state is this person's and still open."""
+        pending = self._pending.get(state)
+        return pending.service if pending is not None and pending.user_id == user_id else None
+
     async def handle_callback(
         self, user_id: str, code: str, state: str, error: str | None = None
     ) -> Connection:

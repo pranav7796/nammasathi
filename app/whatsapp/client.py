@@ -98,6 +98,40 @@ class WhatsAppClient:
             self._sent[key] = sent
             return sent
 
+    async def check(self) -> str:
+        """Asks Meta whether the configured token and phone-number id are accepted. Sends nothing.
+
+        Returns the business number's last four digits for display. Raises ReauthRequired when the
+        token is refused, NotConnected when it is not configured, IntegrationError otherwise.
+        """
+        s = self._settings
+        if not s.whatsapp_configured:
+            raise NotConnected("WhatsApp is not configured")
+        url = f"{GRAPH}/{s.whatsapp_graph_version}/{s.whatsapp_phone_number_id}"
+        headers = {"Authorization": f"Bearer {s.whatsapp_access_token}"}
+        try:
+            async with httpx.AsyncClient(
+                transport=self._transport, timeout=TIMEOUT_SECONDS
+            ) as http:
+                response = await http.get(
+                    url, params={"fields": "display_phone_number,verified_name"}, headers=headers
+                )
+        except httpx.HTTPError:
+            raise IntegrationError("could not reach WhatsApp", retryable=True) from None
+        code = _error_code(response)
+        if response.status_code in (401, 403) or code == 190:
+            raise ReauthRequired(
+                "The WhatsApp access token was refused. The operator must renew it."
+            )
+        if response.status_code >= 400:
+            raise IntegrationError(f"WhatsApp answered {response.status_code}", retryable=True)
+        try:
+            number = str(response.json().get("display_phone_number", ""))
+        except ValueError:
+            number = ""
+        digits = "".join(ch for ch in number if ch.isdigit())
+        return digits[-4:]
+
     async def _post(self, user_id: str, message: OutgoingMessage) -> SentMessage:
         s = self._settings
         url = f"{GRAPH}/{s.whatsapp_graph_version}/{s.whatsapp_phone_number_id}/messages"

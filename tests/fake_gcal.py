@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -47,6 +48,9 @@ class FakeGCal:
         self.deleted_get = "404"  # what get returns for a deleted event: 404, 410, cancelled
         self._deleted: set[str] = set()
         self._seq = 0
+        # Which access tokens Google would accept. A test that also runs the fake OAuth server
+        # points this at the tokens that server issued.
+        self.accept_token: Callable[[str], bool] = lambda token: token == "good-token"
 
     # -- setup helpers -----------------------------------------------------------------------
 
@@ -89,7 +93,8 @@ class FakeGCal:
             if f.method is None or f.method == request.method:
                 del self.failures[i]
                 return self._error(f.status, f.reason, f.message, f.headers)
-        if request.headers.get("Authorization", "") != "Bearer good-token":
+        bearer = request.headers.get("Authorization", "").removeprefix("Bearer ")
+        if not self.accept_token(bearer):
             return self._error(401, "authError", "Invalid Credentials")
         m = _PATH.match(request.url.path)
         if not m:

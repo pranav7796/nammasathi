@@ -23,6 +23,14 @@ class FakeWhatsApp:
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         mode = self.mode
+        if request.method == "GET":  # the "is this token accepted?" check
+            if mode in ("401", "token_expired"):
+                return httpx.Response(401, json={"error": {"code": 190, "message": "expired"}})
+            if mode == "500":
+                return httpx.Response(500, json={})
+            return httpx.Response(
+                200, json={"display_phone_number": "+1 555 000 1234", "verified_name": "Test"}
+            )
         if mode == "ok":
             self.counter += 1
             return httpx.Response(

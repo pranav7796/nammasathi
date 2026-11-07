@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime, timedelta
@@ -393,6 +394,8 @@ async def prepare(kind: str, ctx: Ctx, args: Any, upstream: dict[int, dict[str, 
             "demo": s.demo["calendar"],
         }
         return Prepared(effect, view)
+    if kind in ("calendar.move", "calendar.remove"):
+        return await _prepare_event_change(kind, ctx, args)
     if kind == "calendar.cancel":
         effect = {"event_id": args.event_id}
         return Prepared(effect, {"fields": effect, "conflicts": [], "demo": s.demo["calendar"]})
@@ -446,6 +449,91 @@ def upstream_conflicts(
     return None
 
 
+def _words(text: str) -> list[str]:
+    return [
+        w for w in re.findall(r"[\w\u0900-\u097f\u0c80-\u0cff]+", text.casefold()) if len(w) > 1
+    ]
+
+
+async def _find_event(ctx: Ctx, find: str, on: Date | None) -> tuple[Any | None, str | None]:
+    """The one event the words point at, or why not. Never guesses between several."""
+    if on is not None:
+        begin = datetime.combine(on, Time(0, 0), tzinfo=IST)
+        window = (begin, begin + timedelta(days=1))
+    else:
+        begin = ctx.now.replace(hour=0, minute=0, second=0, microsecond=0)
+        window = (begin, begin + timedelta(days=14))
+    events = await ctx.services.calendar.events(ctx.user_id, *window)
+    needles = _words(find)
+    matches = [
+        e
+        for e in events
+        if needles
+        and all(
+            n in _words(f"{e.title} {' '.join(e.attendees)}") or n in e.title.casefold()
+            for n in needles
+        )
+    ]
+    if not matches:
+        return None, f"I couldn't find an event matching \u201c{find}\u201d in the next two weeks."
+    if len(matches) > 1:
+        options = "; ".join(
+            f"{e.title} on {e.start.astimezone(IST):%a %d %b, %H:%M}" for e in matches[:4]
+        )
+        return None, f"More than one event matches ({options}). Say which one, with its day."
+    return matches[0], None
+
+
+async def _prepare_event_change(kind: str, ctx: Ctx, args: Any) -> Prepared:
+    s = ctx.services
+    event, problem = await _find_event(ctx, args.find, args.on)
+    demo = s.demo["calendar"]
+    if event is None:
+        return Prepared({}, {"fields": {}, "conflicts": [], "demo": demo}, problem)
+    current = event.start.astimezone(IST)
+    minutes = int((event.end - event.start).total_seconds() // 60)
+    if kind == "calendar.remove":
+        effect = {
+            "event_id": event.id,
+            "title": event.title,
+            "date": current.date().isoformat(),
+            "start": current.strftime("%H:%M"),
+            "minutes": minutes,
+            "attendees": list(event.attendees),
+        }
+        return Prepared(
+            effect, {"fields": effect, "conflicts": [], "demo": demo, "operation": "remove"}
+        )
+    day = args.date or current.date()
+    effect = {
+        "event_id": event.id,
+        "title": event.title,
+        "date": day.isoformat(),
+        "start": args.start.strftime("%H:%M"),
+        "minutes": args.minutes or minutes,
+        "attendees": list(event.attendees),
+    }
+    return Prepared(effect, await _move_view(ctx, effect, current))
+
+
+async def _move_view(ctx: Ctx, effect: dict[str, Any], was: datetime) -> dict[str, Any]:
+    begin, end = _slot(
+        Date.fromisoformat(effect["date"]), Time.fromisoformat(effect["start"]), effect["minutes"]
+    )
+    clashes = await ctx.services.calendar.conflicts(ctx.user_id, begin, end)
+    return {
+        "fields": effect,
+        "conflicts": [
+            {"title": e.title, "start": _hhmm(e.start), "end": _hhmm(e.end)}
+            for e in clashes
+            if e.id != effect["event_id"]
+        ],
+        "demo": ctx.services.demo["calendar"],
+        "operation": "move",
+        "was": f"{was:%a %d %b, %H:%M}",
+    }
+
+
 # Edits (before approval) -------------------------------------------------------------------------
 
 
@@ -468,6 +556,20 @@ async def apply_edit(
     allowed = {"gmail.draft_reply": ("to", "subject", "body"), "whatsapp.send": ("to", "body")}.get(
         kind, spec.editable
     )
+    if kind in ("calendar.move", "calendar.remove"):
+        # The form also sends the fields it displays. Read-only ones are accepted unchanged and a
+        # change to them is refused (it is then reported as "can't be changed here").
+        changes = dict(changes)
+        readonly = (
+            ("title", "attendees")
+            if kind == "calendar.move"
+            else ("title", "attendees", "date", "start", "minutes")
+        )
+        for shown in readonly:
+            if shown in changes:
+                same = _lines(changes[shown]) == _lines(effect.get(shown, ""))
+                if str(changes[shown]).strip() == str(effect.get(shown, "")).strip() or same:
+                    del changes[shown]
     unknown = set(changes) - set(allowed)
     if unknown:
         raise EditRejected("That can't be changed here.")
@@ -479,14 +581,17 @@ async def apply_edit(
             for key in ("subject", "body"):
                 if key in changes:
                     merged[key] = str(changes[key])
-            EmailDraftArgs.model_validate(merged)
             view = {
                 "channel": "email",
                 "to": ", ".join(merged["to"]),
-                "subject": merged["subject"].strip(),
-                "body": merged["body"].strip(),
+                "subject": str(merged["subject"]).strip(),
+                "body": str(merged["body"]).strip(),
                 "demo": ctx.services.demo["gmail"],
             }
+            if not merged["to"]:
+                # Nobody to send to yet: check the rest, then wait for an address. Never guess one.
+                EmailDraftArgs.model_validate({**merged, "to": ["placeholder@example.com"]})
+                return merged, Prepared(merged, view, _NO_ADDRESS.format(name="that person"))
             clean = EmailDraftArgs.model_validate(merged).model_dump(mode="json")
             return clean, Prepared(clean, view)
         if kind == "whatsapp.send":
@@ -502,6 +607,18 @@ async def apply_edit(
                     if found.kind != "one" or not found.phone:
                         raise EditRejected("I couldn't find a number for that. Type it as +91…")
                     merged["to_phone"], merged["to_label"] = found.phone, found.name or spoken
+            if not merged.get("to_phone"):
+                # No number yet: check the message, then wait for one. Never guess a number.
+                MessageArgs.model_validate({**merged, "to_phone": "+10000000000"})
+                label = str(merged.get("to_label") or "that person")
+                pending_view = {
+                    "channel": "message",
+                    "to": label,
+                    "to_label": label,
+                    "body": str(merged["body"]).strip(),
+                    "demo": ctx.services.demo["whatsapp"],
+                }
+                return merged, Prepared(merged, pending_view, _NO_NUMBER.format(name=label))
             clean = MessageArgs.model_validate(merged).model_dump(mode="json")
             view = {
                 "channel": "message",
@@ -520,6 +637,25 @@ async def apply_edit(
             checked = K.CalendarCreate.model_validate(merged)
             prepared = await prepare("calendar.create", ctx, checked, {})
             return prepared.effect_args, prepared
+        if kind == "calendar.move":
+            for key in ("date", "start", "minutes"):
+                if key in changes:
+                    merged[key] = changes[key]
+            checked_move = K.CalendarReschedule.model_validate(
+                {
+                    "event_id": merged["event_id"],
+                    "date": merged["date"],
+                    "start": merged["start"],
+                    "minutes": merged["minutes"],
+                }
+            )
+            clean = {
+                **merged,
+                "date": checked_move.date.isoformat(),
+                "start": checked_move.start.strftime("%H:%M"),
+                "minutes": checked_move.minutes or merged["minutes"],
+            }
+            return clean, Prepared(clean, await _move_view(ctx, clean, ctx.now))
         if kind == "calendar.reschedule":
             for key in ("date", "start", "minutes"):
                 if key in changes:
@@ -541,10 +677,25 @@ async def apply_edit(
     raise EditRejected("That can't be changed here.")
 
 
+_FRIENDLY = {
+    "to": "Please type a valid email address in the To box.",
+    "subject": "The subject can't be empty.",
+    "body": "The message can't be empty, and must not be too long.",
+    "to_phone": "Please type the number like +919876543210.",
+    "title": "The event needs a title.",
+    "date": "Please give a valid date.",
+    "start": "Please give a valid time.",
+    "minutes": "The length should be between 5 and 480 minutes.",
+    "attendees": "Please check the attendee email addresses.",
+    "text": "Please write what to remind you about.",
+}
+
+
 def _first_error(exc: ValidationError) -> str:
+    """A sentence a person can act on, never a library's wording."""
     first = exc.errors()[0]
-    where = ".".join(str(p) for p in first["loc"]) or "value"
-    return f"Please check {where}: {first['msg']}"
+    where = str(first["loc"][-1]) if first["loc"] else "value"
+    return _FRIENDLY.get(where, "Please check what you typed.")
 
 
 # Effects (after approval) ------------------------------------------------------------------------
@@ -591,6 +742,17 @@ async def effect(kind: str, ctx: Ctx, effect_args: dict[str, Any], key: str) -> 
             key,
         )
         return Outcome({"event_id": created.event.id}, created.verified)
+    if kind == "calendar.move":
+        moved_event = K.CalendarReschedule.model_validate(
+            {k: effect_args[k] for k in ("event_id", "date", "start", "minutes")}
+        )
+        begin, end = _slot(moved_event.date, moved_event.start, moved_event.minutes or 30)
+        shifted = await s.calendar.reschedule(ctx.user_id, moved_event.event_id, begin, end)
+        return Outcome({"event_id": shifted.event.id}, shifted.verified)
+    if kind == "calendar.remove":
+        removed = K.CalendarCancel.model_validate({"event_id": effect_args["event_id"]})
+        gone_now = await s.calendar.cancel(ctx.user_id, removed.event_id)
+        return Outcome({"event_id": removed.event_id}, gone_now)
     if kind == "calendar.reschedule":
         moved = K.CalendarReschedule.model_validate(effect_args)
         begin, end = _slot(moved.date, moved.start, moved.minutes or 30)

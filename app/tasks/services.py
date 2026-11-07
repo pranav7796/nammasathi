@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+import httpx
+
 from app.accounts.service import AccountService
 from app.google.calendar import GoogleCalendarClient
 from app.google.gmail import GmailClient
@@ -42,14 +44,22 @@ class MemoryContacts:
 
 
 class ServiceHub:
-    def __init__(self, accounts: AccountService, google: GoogleOAuth) -> None:
+    def __init__(
+        self,
+        accounts: AccountService,
+        google: GoogleOAuth,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        """`transport` is for tests, which stand in for Google and Meta. Production passes none."""
         self._accounts = accounts
         self._google = google
+        self._transport = transport
         self._demo = DemoWorld()
         self._personal = PersonalService(accounts)
         self._contacts: ContactResolver = MemoryContacts(MemoryService(accounts))
         self._whatsapp = (
-            WhatsAppClient(accounts.settings, accounts)
+            WhatsAppClient(accounts.settings, accounts, transport=transport)
             if accounts.settings.whatsapp_configured
             else None
         )
@@ -66,9 +76,15 @@ class ServiceHub:
             except Exception:
                 connected = {"gmail": False, "calendar": False}
         demo_email, demo_calendar, demo_messaging = self._demo.of(user_id)
-        email = GmailClient(self._google.tokens) if connected["gmail"] else demo_email
+        email = (
+            GmailClient(self._google.tokens, transport=self._transport)
+            if connected["gmail"]
+            else demo_email
+        )
         calendar = (
-            GoogleCalendarClient(self._google.tokens) if connected["calendar"] else demo_calendar
+            GoogleCalendarClient(self._google.tokens, transport=self._transport)
+            if connected["calendar"]
+            else demo_calendar
         )
         messaging = self._whatsapp if self._whatsapp is not None else demo_messaging
         demo = {

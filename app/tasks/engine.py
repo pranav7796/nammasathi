@@ -50,7 +50,7 @@ EFFECT_TIMEOUT_SECONDS = 40.0
 MAX_ATTEMPTS = 3
 PLANS_PER_HOUR = 20
 # Kinds whose whole preview is the board line itself, so the Approve button needs no form.
-APPROVE_WITHOUT_VALUES = frozenset({"reminder.create", "calendar.cancel"})
+APPROVE_WITHOUT_VALUES = frozenset({"reminder.create", "calendar.cancel", "calendar.remove"})
 
 ServiceProvider = Callable[[str], Awaitable[ex.Services]]
 Clock = Callable[[], datetime]
@@ -118,12 +118,14 @@ class TaskEngine:
         *,
         run_blocking: Callable[..., Awaitable[Any]],
         clock: Clock = _now,
+        notes: Any = None,
     ) -> None:
         """`run_blocking(call, *args)` runs a store call off the event loop (AccountService.run)."""
         self.store = store
         self._services = services
         self._run = run_blocking
         self._clock = clock
+        self._notes = notes  # IntegrationNotes, or None
         self._locks: dict[str, asyncio.Lock] = {}
         self._background: set[asyncio.Task[None]] = set()
         self._limiter = _Limiter(PLANS_PER_HOUR, 3600)
@@ -302,9 +304,13 @@ class TaskEngine:
     async def _fail(self, task: TaskRow, exc: Exception, started: int, *, effect: bool) -> None:
         unknown = False
         if isinstance(exc, ReauthRequired):
-            message = "That account needs to be connected again."
+            provider = K.spec_for(task.kind).provider
+            if self._notes is not None and provider in ("gmail", "calendar"):
+                self._notes.record(task.user_id, provider, str(exc))
+            # Our own adapters word this for the person (for example, who must renew a token).
+            message = str(exc).strip()[:200] or "That account needs to be connected again."
         elif isinstance(exc, NotConnected):
-            message = "That service isn't connected yet."
+            message = str(exc).strip()[:200] or "That service isn't connected yet."
         elif isinstance(exc, RateLimited):
             message = "That service is busy. Please try again in a moment."
         elif isinstance(exc, TimeoutError):
@@ -354,8 +360,10 @@ class TaskEngine:
         task = await self._db(self.store.task, user_id, task_id)
         if task is None or not task.side_effect:
             return "not_found"
-        if task.status != "waiting_for_approval":
-            return "needs_input" if task.status == "waiting_for_input" else "not_waiting"
+        if task.status not in ("waiting_for_approval", "waiting_for_input"):
+            return "not_waiting"
+        if task.status == "waiting_for_input" and not values:
+            return "needs_input"
         if values:
             edited = await self.edit(user_id, task_id, values)
             if edited != "ok":

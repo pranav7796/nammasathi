@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -168,6 +168,24 @@ _CLOCKS = [
 _MIDNIGHT = re.compile(rf"{_B0}midnight{_B1}", re.I)
 _NOON = re.compile(rf"{_B0}noon{_B1}", re.I)
 _REMIND = re.compile(r"^\s*remind\s+me\s+(?:to|that|about)?\s*", re.I)
+# Absolute dates. A bare "1/2" is not a date (it may be half a kilo): the numeric form needs "on".
+_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3, "apr": 4,
+    "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9, "oct": 10, "october": 10, "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}  # fmt: skip
+_MONTH_NAMES = "|".join(sorted(_MONTHS, key=len, reverse=True))
+_ORDINAL = r"(?:st|nd|rd|th)?"
+_ABS_DMY = re.compile(
+    rf"{_B0}(?:on\s+)?(\d{{1,2}}){_ORDINAL}\s+(?:of\s+)?({_MONTH_NAMES})\.?(?:,?\s+(\d{{4}}))?{_B1}",
+    re.I,
+)
+_ABS_MDY = re.compile(
+    rf"{_B0}(?:on\s+)?({_MONTH_NAMES})\.?\s+(\d{{1,2}}){_ORDINAL}(?:,?\s+(\d{{4}}))?{_B1}", re.I
+)
+_ABS_NUM = re.compile(rf"{_B0}on\s+(\d{{1,2}})[/-](\d{{1,2}})(?:[/-](\d{{4}}))?{_B1}", re.I)
+_ABS_ISO = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
 _EDGE_WORDS = {"at", "on", "by", "for", "in", "to", "this", "next", "coming", "ko", "को", "mein"}
 
 
@@ -184,6 +202,10 @@ class _Ambiguous(Exception):
 def _number(token: str) -> int:
     lowered = token.lower()
     return _WORDS[lowered] if lowered in _WORDS else int(lowered)
+
+
+def _year(token: str | None) -> int | None:
+    return int(token) if token else None
 
 
 def _tidy(text: str) -> str:
@@ -229,6 +251,36 @@ def _resolve_hour(hour: int, minute: int, suffix: str, period: str | None) -> tu
 def _parse(text: str, now: datetime) -> ParsedWhen | None:
     now = now.replace(tzinfo=IST) if now.tzinfo is None else now.astimezone(IST)
     work = text
+
+    # An absolute date: "10 November", "Nov 10th", "on 10/11", "2026-11-10".
+    absolute: list[tuple[int, int, int | None]] = []  # (day, month, year or None)
+
+    def take_dmy(match: re.Match[str]) -> str:
+        absolute.append(
+            (int(match.group(1)), _MONTHS[match.group(2).lower()], _year(match.group(3)))
+        )
+        return " "
+
+    def take_mdy(match: re.Match[str]) -> str:
+        absolute.append(
+            (int(match.group(2)), _MONTHS[match.group(1).lower()], _year(match.group(3)))
+        )
+        return " "
+
+    def take_num(match: re.Match[str]) -> str:
+        absolute.append((int(match.group(1)), int(match.group(2)), _year(match.group(3))))
+        return " "
+
+    def take_iso(match: re.Match[str]) -> str:
+        absolute.append((int(match.group(3)), int(match.group(2)), int(match.group(1))))
+        return " "
+
+    work = _ABS_ISO.sub(take_iso, work)
+    work = _ABS_DMY.sub(take_dmy, work)
+    work = _ABS_MDY.sub(take_mdy, work)
+    work = _ABS_NUM.sub(take_num, work)
+    if len(absolute) > 1:
+        return None
 
     # In N minutes / hours / days.
     relative: list[tuple[int, str]] = []
@@ -297,16 +349,16 @@ def _parse(text: str, now: datetime) -> ParsedWhen | None:
         return None
     period = periods[0] if periods else None
 
-    if len(days) + len(weekdays) > 1:
+    if len(days) + len(weekdays) + len(absolute) > 1:
         return None
-    if not (relative or clocks or named or days or weekdays or period):
+    if not (relative or clocks or named or days or weekdays or period or absolute):
         return None
 
     remainder = _tidy(work)
 
     if relative:
         amount, unit = relative[0]
-        if amount < 1 or period or weekdays or days:
+        if amount < 1 or period or weekdays or days or absolute:
             return None
         if unit in {"m", "h"}:
             if clocks or named:
@@ -321,7 +373,7 @@ def _parse(text: str, now: datetime) -> ParsedWhen | None:
             return None
         days = [offset]
 
-    explicit_date = bool(days or weekdays or soft_today)
+    explicit_date = bool(days or weekdays or soft_today or absolute)
     try:
         if clocks:
             hour, minute, suffix = clocks[0]
@@ -340,7 +392,17 @@ def _parse(text: str, now: datetime) -> ParsedWhen | None:
         return None
 
     today = now.date()
-    if days:
+    if absolute:
+        day, month, year = absolute[0]
+        try:
+            target = date(year or today.year, month, day)
+            if year is None and target < today:
+                target = date(today.year + 1, month, day)  # a date already gone means next year
+        except ValueError:
+            return None  # such as 31 February
+        if (target - today).days > _MAX_DAYS:
+            return None
+    elif days:
         target = today + timedelta(days=days[0])
     elif weekdays:
         weekday, prefixed = weekdays[0]
@@ -359,6 +421,14 @@ def _parse(text: str, now: datetime) -> ParsedWhen | None:
             return None
         due += timedelta(days=1)
     return ParsedWhen(due, remainder)
+
+
+def names_a_day(text: str) -> bool:
+    """True if the text names a day (tomorrow, Friday, 10 November), not only a clock time."""
+    return any(
+        pattern.search(text)
+        for pattern in (_DAYS, _WEEKDAY_RE, _ABS_DMY, _ABS_MDY, _ABS_NUM, _ABS_ISO)
+    )
 
 
 def parse_when(text: str, now: datetime) -> ParsedWhen | None:

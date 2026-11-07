@@ -37,6 +37,17 @@ def _service(request: Request, accounts: AccountService | None) -> AccountServic
     return service
 
 
+_WHY = {
+    "AccessDenied": "You didn't allow access on Google's screen, so nothing was connected.",
+    "InvalidState": "That sign-in link expired or was already used. Press Connect to try again.",
+    "ExchangeFailed": (
+        "Google didn't accept the sign-in. The owner should check the client ID, client secret "
+        "and redirect address in Google Cloud."
+    ),
+    "GoogleOAuthError": "Google sign-in didn't finish. Try again.",
+}
+
+
 def google_router(accounts: AccountService | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/google")
     built: dict[int, GoogleOAuth] = {}
@@ -86,10 +97,17 @@ def google_router(accounts: AccountService | None = None) -> APIRouter:
         accounts_service = _service(request, accounts)
         user = await signed_in(accounts_service, request)
         oauth = oauth_for(request, accounts_service)
+        which = oauth.service_for_state(user.id, state)
         try:
             await oauth.handle_callback(user.id, code, state, error or None)
-        except GoogleOAuthError:
+        except GoogleOAuthError as exc:
+            notes = getattr(request.app.state, "integration_notes", None)
+            if notes is not None and which is not None:
+                notes.record(user.id, which, _WHY.get(type(exc).__name__, _WHY["GoogleOAuthError"]))
             return RedirectResponse("/#google=error", status_code=303)
+        notes = getattr(request.app.state, "integration_notes", None)
+        if notes is not None and which is not None:
+            notes.clear(user.id, which)
         log_event("google", op="callback", outcome="connected")
         return RedirectResponse("/#google=connected", status_code=303)
 

@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from app.personal.dates import IST, parse_when
+from app.personal.dates import IST, names_a_day, parse_when
 from app.personal.voice import reminder_request
 from app.tasks.kinds import is_phone
 from app.tasks.pending import Pending
@@ -125,6 +125,8 @@ def trigger_categories(text: str) -> set[str]:
     found: set[str] = set()
     if _REPLY_TO.search(text):
         found.add("email")
+    if _EVENT_NOUN.search(text) and (_REMOVE_VERB.search(text) or _MOVE_VERB.search(text)):
+        found.add("calendar")  # "cancel my call with Meera": a verb and an event, not "call Amma"
     for name, pattern in (
         ("whatsapp", _WHATSAPP),
         ("message", _MESSAGE),
@@ -485,7 +487,81 @@ def _event_title(clause: str) -> str:
     return label
 
 
+_REMOVE_VERB = re.compile(r"\b(?:cancel|delete|remove|drop|call\s+off)\b", re.IGNORECASE)
+_MOVE_VERB = re.compile(r"\b(?:move|reschedule|shift|postpone|push)\b", re.IGNORECASE)
+_BEFORE_NOUN = re.compile(
+    r"(?:cancel|delete|remove|drop|call\s+off|move|reschedule|shift|postpone|push)\s+"
+    r"(?:my\s+|the\s+|a\s+|an\s+)?(?P<w>[\w' ]+?)\s+"
+    r"(?:meeting|appointment|event|call|catch-?up|sync|interview|stand-?up)s?\b",
+    re.IGNORECASE,
+)
+
+
+def _find_words(clause: str) -> str | None:
+    """Words that point at an existing event: a person ("Rahul") or a name ("dentist")."""
+    who = _WITH_NAME.search(clause)
+    if who:
+        found = _tidy(who.group(1))
+        return found or None
+    before = _BEFORE_NOUN.search(clause)
+    if before:
+        found = _tidy(before.group("w"))
+        if found and found.lower() not in {"my", "the", "a", "an"}:
+            return found
+    return None
+
+
+def _on_day(clause: str, now: datetime) -> str | None:
+    """The day the person named for an existing event, if any."""
+    if not names_a_day(clause):
+        return None
+    parsed = parse_when(clause, now) or parse_when(f"{clause} 9 am", now)
+    return parsed.due.date().isoformat() if parsed else None
+
+
+def _calendar_change(clause: str, now: datetime, out: RulesResult) -> bool:
+    """ "Cancel my meeting with Rahul", "move my meeting with Rahul to 4 PM". True if handled."""
+    if not _EVENT_NOUN.search(clause):
+        return False
+    removing = bool(_REMOVE_VERB.search(clause))
+    moving = bool(_MOVE_VERB.search(clause))
+    if not (removing or moving):
+        return False
+    find = _find_words(clause)
+    day = _on_day(clause.split(" to ")[0] if moving else clause, now)
+    if removing and not moving:
+        if find is None:
+            out.ask(Pending("calendar.remove", "find", {}, "Which event should I cancel?"))
+            return True
+        args: dict[str, object] = {"find": find[:200]}
+        if day:
+            args["on"] = day
+        out.tasks.append({"kind": "calendar.remove", "args": args})
+        return True
+    tail = re.search(r"\b(?:to|at|for)\s+(.+)$", clause, re.IGNORECASE)
+    when_text = tail.group(1) if tail else ""
+    parsed = parse_when(when_text, now) if when_text else None
+    known: dict[str, object] = {}
+    if find:
+        known["find"] = find[:200]
+    if day:
+        known["on"] = day
+    if parsed is not None:
+        known["start"] = parsed.due.strftime("%H:%M")
+        if names_a_day(when_text):
+            known["date"] = parsed.due.date().isoformat()
+    if find is None:
+        out.ask(Pending("calendar.move", "find", known, "Which event should I move?"))
+    elif "start" not in known:
+        out.ask(Pending("calendar.move", "when", known, "What time should I move it to?"))
+    else:
+        out.tasks.append({"kind": "calendar.move", "args": known})
+    return True
+
+
 def _calendar(clause: str, now: datetime, out: RulesResult) -> None:
+    if _calendar_change(clause, now, out):
+        return
     creating = bool(_CREATE_VERB.search(clause)) and bool(_EVENT_NOUN.search(clause))
     noun_with = bool(_EVENT_NOUN.search(clause)) and bool(
         _WITH_NAME.search(clause) or _HI_WITH.search(clause) or _KN_WITH.search(clause)
@@ -759,6 +835,8 @@ def _first_category(clause: str) -> str | None:
         return "reminder"  # "<what and when> yaad dilao" names other things before the verb
     if _REPLY_TO.search(clause):
         return "email"  # "Reply to Rahul saying I'll attend the meeting" is mail, not calendar
+    if _EVENT_NOUN.search(clause) and (_REMOVE_VERB.search(clause) or _MOVE_VERB.search(clause)):
+        return "calendar"  # "cancel my call with Meera" changes an event, it does not make a call
     positions: list[tuple[int, str]] = []
     for name, pattern in (
         ("reminder", _REMINDER),

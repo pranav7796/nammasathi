@@ -385,6 +385,7 @@ def event_preview_widget(
     detail: str | None = None,
     demo: bool,
     editable: bool = False,
+    heading: str = "New event",
 ) -> Widget:
     """Draft shows Approve (task.approve:<task_id>) and Cancel (task.cancel:<task_id>)."""
     _capped(len(fields.attendees), 10, "attendees")
@@ -393,7 +394,7 @@ def event_preview_widget(
     data: dict[str, Any] = {
         "type": "event_preview",
         "id": f"event.{task_id}",
-        "title": "New event",
+        "title": clean_text(heading, 100) or "Event",
         "fields": {
             "title": clean_text(fields.title, 200) or "Event",
             "date": _date_text(fields.date),

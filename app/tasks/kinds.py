@@ -116,6 +116,21 @@ class CalendarCancel(_Args):
     ]
 
 
+class CalendarMove(_Args):
+    """ "Move my meeting with Rahul to 4 PM": the event is found by words, never by an id."""
+
+    find: ShortText  # words from the event's title or an attendee
+    on: Date | None = None  # which day to look on; otherwise the next two weeks
+    date: Date | None = None  # the new day; None keeps the event's own day
+    start: Time
+    minutes: int | None = Field(default=None, ge=5, le=480)
+
+
+class CalendarRemove(_Args):
+    find: ShortText
+    on: Date | None = None
+
+
 class ReminderCreate(_Args):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
     when_text: str | None = Field(default=None, max_length=100)
@@ -171,6 +186,15 @@ CATALOGUE: dict[str, KindSpec] = {
             ("date", "start", "minutes"),
         ),
         KindSpec("calendar.cancel", "calendar", CalendarCancel, True, "Cancel calendar event"),
+        KindSpec(
+            "calendar.move",
+            "calendar",
+            CalendarMove,
+            True,
+            "Move calendar event",
+            ("date", "start", "minutes"),
+        ),
+        KindSpec("calendar.remove", "calendar", CalendarRemove, True, "Cancel calendar event"),
         KindSpec(
             "reminder.create",
             "local",

@@ -330,6 +330,14 @@ class GmailClient:
 
         return list(await asyncio.gather(*(one(i) for i in ids)))
 
+    async def verify(self, user_id: str) -> None:
+        """A cheap read-only call that proves Google still accepts this connection.
+
+        It lists one message id and reads no content. A stored credential alone proves nothing: it
+        may have been revoked, and a cached access token would hide that for up to an hour.
+        """
+        await self._request(user_id, "GET", "/messages", params={"maxResults": 1})
+
     async def search(self, user_id: str, query: str, limit: int) -> list[EmailSummary]:
         limit = max(1, min(limit, MAX_LIMIT))
         listing = await self._request(

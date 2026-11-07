@@ -26,7 +26,7 @@ from app.assistant.router import keyword_domain
 from app.genui.models import Widget
 from app.observability import log_event
 from app.orchestrator.confirmation import explicit_confirmation
-from app.personal.dates import parse_when
+from app.personal.dates import names_a_day, parse_when
 from app.tasks import kinds as K
 from app.tasks import render, rules
 from app.tasks.engine import PendingState, Snapshot, TaskEngine, VoicePending
@@ -160,6 +160,21 @@ _ASK: dict[tuple[str, str], dict[str, str]] = {
         "hi-IN": "कौन सा दिन और समय देखूँ?",
         "kn-IN": "ಯಾವ ದಿನ ಮತ್ತು ಸಮಯ ನೋಡಲಿ?",
     },
+    ("calendar.remove", "find"): {
+        "en-IN": "Which event should I cancel? Say a person or a name.",
+        "hi-IN": "कौन सा इवेंट रद्द करूँ? किसी का नाम बोलें।",
+        "kn-IN": "ಯಾವ ಕಾರ್ಯಕ್ರಮ ರದ್ದುಮಾಡಲಿ? ಹೆಸರು ಹೇಳಿ.",
+    },
+    ("calendar.move", "find"): {
+        "en-IN": "Which event should I move? Say a person or a name.",
+        "hi-IN": "कौन सा इवेंट बदलूँ? किसी का नाम बोलें।",
+        "kn-IN": "ಯಾವ ಕಾರ್ಯಕ್ರಮ ಬದಲಿಸಲಿ? ಹೆಸರು ಹೇಳಿ.",
+    },
+    ("calendar.move", "when"): {
+        "en-IN": "What time should I move it to? For example, 4 PM.",
+        "hi-IN": "किस समय पर ले जाऊँ? जैसे, शाम 4 बजे।",
+        "kn-IN": "ಯಾವ ಸಮಯಕ್ಕೆ ಬದಲಿಸಲಿ? ಉದಾಹರಣೆಗೆ, ಸಂಜೆ 4 ಗಂಟೆಗೆ.",
+    },
     ("reminder.create", "text"): {
         "en-IN": "What should I remind you about?",
         "hi-IN": "किस बारे में याद दिलाऊँ?",
@@ -284,6 +299,21 @@ def _fill(pending: Pending, text: str, now: Any) -> _Filled | _Still | _Retry | 
         if kind == "gmail.draft_reply":
             return _Filled(PlannedTask(kind, {"to": known["to"], "intent": answer[:500]}))
         return _Filled(PlannedTask(kind, {"text": answer[:500], "when_text": None}))
+    if slot == "find":
+        if not answer or _is_new_request(text):
+            return _Moved() if answer else _Retry()
+        known["find"] = answer[:200]
+        if kind == "calendar.move" and "start" not in known:
+            return _Still(Pending(kind, "when", known, ""))
+        return _Filled(PlannedTask(kind, known))
+    if slot == "when" and kind == "calendar.move":
+        parsed = parse_when(text, now)
+        if parsed is None:
+            return _Moved() if _is_new_request(text) else _Retry()
+        known["start"] = parsed.due.strftime("%H:%M")
+        if names_a_day(text):
+            known["date"] = parsed.due.date().isoformat()
+        return _Filled(PlannedTask(kind, known))
     if slot == "when":
         parsed = parse_when(text, now)
         if parsed is None:

@@ -56,6 +56,14 @@ async def test_long_example_yields_five_tasks_with_availability_first() -> None:
 CASES: list[tuple[str, str, str, dict[str, object]]] = [
     # (language, text, kind, expected args subset)
     ("en", "check my important emails", "gmail.important", {}),
+    ("en", "cancel my meeting with Rahul tomorrow", "calendar.remove", {"find": "Rahul"}),
+    ("en", "delete my call with Meera", "calendar.remove", {"find": "Meera"}),
+    (
+        "en",
+        "move my meeting with Rahul to 4 PM",
+        "calendar.move",
+        {"find": "Rahul", "start": "16:00:00"},
+    ),
     ("en", "show me emails that need a reply", "gmail.needs_reply", {}),
     (
         "en",
@@ -170,7 +178,8 @@ async def test_mixed_language_request() -> None:
 
 async def test_every_kind_in_the_catalogue_that_rules_can_plan_is_covered() -> None:
     covered = {kind for _, _, kind, _ in CASES}
-    # Reschedule, cancel and send need an event id or a full address: rules never guess those.
+    # Reschedule and cancel by id, and send, need an id or a full address: rules never guess those.
+    # (Moving or cancelling an event by what it is called is covered: calendar.move and .remove.)
     assert set(CATALOGUE) - covered == {
         "gmail.send",
         "calendar.reschedule",

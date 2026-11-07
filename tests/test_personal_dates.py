@@ -159,3 +159,43 @@ def test_text_is_not_mangled_inside_words() -> None:
     parsed = parse_when("raat 9 baje khaana", NOW)
     assert parsed is not None and parsed.text == "khaana"
     assert parse_when("read Saturnalia", NOW) is None
+
+
+# Absolute dates. "10 November at 3 PM" used to be read as today at 3 PM, because the date was
+# silently dropped, so a meeting could be proposed for the wrong day.
+
+
+@pytest.mark.parametrize(
+    ("text", "due", "left"),
+    [
+        ("on 10 November at 3 PM", "2026-11-10T15:00", ""),
+        ("10 November 3 PM", "2026-11-10T15:00", ""),
+        ("November 10th at 3pm", "2026-11-10T15:00", ""),
+        ("15th Nov at 4 pm", "2026-11-15T16:00", ""),
+        ("on 10/11 at 3 pm", "2026-11-10T15:00", ""),
+        ("2026-11-12 5 pm", "2026-11-12T17:00", ""),
+        ("call mom on 12 november", "2026-11-12T09:00", "call mom"),
+        ("3 March at 9 am", "2027-03-03T09:00", ""),  # already gone this year: next year
+        ("1 Jan 2027 at 8 am", "2027-01-01T08:00", ""),
+    ],
+)
+def test_absolute_dates_are_understood(text: str, due: str, left: str) -> None:
+    result = parse_when(text, datetime(2026, 11, 9, 10, 0, tzinfo=IST))
+    assert result is not None
+    assert result.due.strftime("%Y-%m-%dT%H:%M") == due
+    assert result.text == left
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "31 February 3pm",  # not a real date
+        "buy 1/2 kg rice",  # half a kilo, not 1 February
+        "remind me 2 kilos of rice",
+        "10 November and 12 November at 3 pm",  # two dates: ambiguous
+        "tomorrow on 10 November",  # a day word and a date disagree
+        "9 November at 9 am",  # already past today
+    ],
+)
+def test_absolute_dates_that_are_unclear_or_not_dates_are_refused(text: str) -> None:
+    assert parse_when(text, datetime(2026, 11, 9, 10, 0, tzinfo=IST)) is None

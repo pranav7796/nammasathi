@@ -29,7 +29,7 @@ import asyncio
 import base64
 import hashlib
 import re
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -342,6 +342,11 @@ class GoogleCalendarClient(CalendarClient):
             page_token = token
         found.sort(key=lambda pair: pair[0].start)
         return found
+
+    async def verify(self, user_id: str) -> None:
+        """A cheap read-only call that proves Google still accepts this connection."""
+        now = datetime.now(UTC)
+        await self._window(user_id, now, now + timedelta(minutes=1))
 
     async def events(self, user_id: str, start: datetime, end: datetime) -> list[Event]:
         return [ev for ev, _ in await self._window(user_id, start, end)]

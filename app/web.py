@@ -65,6 +65,8 @@ from app.genui.models import Widget
 from app.genui.validate import GenUIError, to_wire
 from app.google.oauth import ConnectionStore, GoogleOAuth
 from app.google.routes import google_router
+from app.integrations.routes import integrations_router
+from app.integrations.status import IntegrationNotes
 from app.llm.chain import SCRIPTED, build_extractor
 from app.llm.extractor import IntentExtractionError
 from app.memory.routes import memory_router
@@ -95,6 +97,7 @@ from app.voice.gnani import (
 )
 from app.voice.presentation import response_text, speech_error_text
 from app.waitlist import waitlist_router
+from app.whatsapp.client import WhatsAppClient
 from app.whatsapp.routes import whatsapp_router
 
 MAX_AUDIO_BYTES = 12 * 1024 * 1024
@@ -250,16 +253,25 @@ def create_app(
         application.state.accounts = service
         application.state.close_user_conversations = close_user_conversations
         application.state.google = None
+        application.state.whatsapp = None
+        application.state.integration_notes = IntegrationNotes()
         application.state.tasks = None
         engine: TaskEngine | None = None
         application.state.plan_extractor = None
         if service is not None:
-            google = GoogleOAuth(runtime_settings, ConnectionStore(service))
+            # Tests set this to stand in for Google and Meta. In production it is unset.
+            transport = getattr(application.state, "integration_transport", None)
+            google = GoogleOAuth(runtime_settings, ConnectionStore(service), transport=transport)
             application.state.google = google
+            if runtime_settings.whatsapp_configured:
+                application.state.whatsapp = WhatsAppClient(
+                    runtime_settings, service, transport=transport
+                )
             engine = TaskEngine(
                 TaskStore(service.database),
-                ServiceHub(service, google).for_user,
+                ServiceHub(service, google, transport=transport).for_user,
                 run_blocking=service.run,
+                notes=application.state.integration_notes,
             )
             try:
                 await engine.start()
@@ -296,6 +308,7 @@ def create_app(
     application.include_router(waitlist_router())
     application.include_router(personal_router())
     application.include_router(google_router())
+    application.include_router(integrations_router())
     application.include_router(whatsapp_router())
     application.include_router(memory_router())
     application.include_router(tasks_router())

@@ -75,6 +75,8 @@ def _state_detail(task: TaskRow, whatsapp: str = "") -> str | None:
             "calendar.create": "Created. I read it back from your calendar.",
             "calendar.reschedule": "Moved. I read it back from your calendar.",
             "calendar.cancel": "Removed. Your calendar no longer shows it.",
+            "calendar.move": "Moved. I read it back from your calendar.",
+            "calendar.remove": "Removed. Your calendar no longer shows it.",
             "whatsapp.send": whatsapp or None,
             "reminder.create": "Saved to your reminders.",
         }.get(task.kind)
@@ -106,6 +108,7 @@ def _board(snapshot: Snapshot, whatsapp: dict[str, str]) -> Widget:
             "gmail.send",
             "whatsapp.send",
             "calendar.create",
+            "calendar.move",
         )
         rows.append(
             B.TaskInput(
@@ -174,8 +177,13 @@ def _event(task: TaskRow, detail: str | None) -> Widget | None:
         "failed": "failed",
         "cancelled": "cancelled",
     }.get(task.status, "draft")
+    operation = view.get("operation")
+    heading = {"move": "Move event", "remove": "Cancel this event?"}.get(
+        str(operation), "New event"
+    )
     return B.event_preview_widget(
         task.id,
+        heading=heading,
         fields=B.EventFields(
             title=str(fields["title"]),
             date=str(fields["date"]),
@@ -189,7 +197,9 @@ def _event(task: TaskRow, detail: str | None) -> Widget | None:
         ],
         state=state,
         detail=(
-            detail
+            f"Now {view['was']}. {detail or ''}".strip()
+            if operation == "move" and task.status == "waiting_for_approval"
+            else detail
             if task.status != "waiting_for_approval"
             else (
                 "Invitations will be emailed to the people listed."
@@ -198,7 +208,8 @@ def _event(task: TaskRow, detail: str | None) -> Widget | None:
             )
         ),
         demo=bool(view.get("demo")),
-        editable=task.status in ("waiting_for_approval", "waiting_for_input"),
+        editable=operation != "remove"
+        and task.status in ("waiting_for_approval", "waiting_for_input"),
     )
 
 
@@ -247,7 +258,7 @@ def view_widgets(task: TaskRow, detail: str | None) -> list[Widget]:
     if task.kind in ("gmail.draft_reply", "gmail.send", "whatsapp.send"):
         widget = _composer(task, detail)
         return [widget] if widget else []
-    if task.kind in ("calendar.create",):
+    if task.kind in ("calendar.create", "calendar.move", "calendar.remove"):
         widget = _event(task, detail)
         return [widget] if widget else []
     return []
