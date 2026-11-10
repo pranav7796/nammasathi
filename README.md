@@ -17,7 +17,7 @@ Switch tasks whenever you like. Ask for a table halfway through your groceries, 
 for you. A yes only ever applies to what Saathi just read back.
 
 > **Project status:** all three journeys work end to end on built-in mock shops, with real speech and
-> a real LLM. **No real order or booking has been placed.** Live Swiggy access is limited to what is
+> a real LLM. **One real Instamart order was placed by voice on 10 November 2026 (5 items, Rs 269, verified by order tracking). No real food order or table booking has been placed.** Live Swiggy access is limited to what is
 > listed under [Status](#status), and Swiggy has not granted production access. People can sign up and
 > use all three demo journeys with their own history and demo orders, which needs no Swiggy access.
 > Per-user Swiggy connections are built and tested against a stand-in Swiggy, not the real one.

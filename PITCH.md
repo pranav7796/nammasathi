@@ -40,8 +40,9 @@ checkout. This makes a voice assistant safe to trust with money.
   Gnani speech and a real LLM. Anyone can try them on the live site.
 - Accounts, per-person history and a public waitlist are live.
 - Gmail and Calendar work for early-access testers.
-- Against real Swiggy: sign-in, search and cart readback are verified. **No real order has been
-  placed.** Real ordering opens when Swiggy grants production access.
+- Against real Swiggy: sign-in, search and cart readback are verified, and **one real Instamart
+  order (5 items, Rs 269, 10 Nov 2026) was placed by voice** and verified by order tracking. Real
+  ordering for other people opens when Swiggy grants production access.
 
 ## Why it matters
 
