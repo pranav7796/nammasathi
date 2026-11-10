@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <!-- Link preview image. Render with: rsvg-convert -w 1200 -h 630 scripts/og-image.svg -o app/static/og.png -->
+  <defs>
+    <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14877a"/><stop offset="1" stop-color="#08423d"/></linearGradient>
+    <radialGradient id="orb" cx="50%" cy="38%" r="68%"><stop offset="0" stop-color="#1d9a89"/><stop offset="1" stop-color="#08423d"/></radialGradient>
+    <radialGradient id="glowA" cx="88%" cy="0%" r="60%"><stop offset="0" stop-color="#0d6a60" stop-opacity=".16"/><stop offset="1" stop-color="#0d6a60" stop-opacity="0"/></radialGradient>
+    <radialGradient id="glowB" cx="0%" cy="100%" r="55%"><stop offset="0" stop-color="#f0a52b" stop-opacity=".2"/><stop offset="1" stop-color="#f0a52b" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#f6f4ef"/>
+  <rect width="1200" height="630" fill="url(#glowA)"/>
+  <rect width="1200" height="630" fill="url(#glowB)"/>
+
+  <!-- brand -->
+  <g transform="translate(72 64) scale(1.6)">
+    <rect width="40" height="40" rx="12" fill="url(#lg)"/>
+    <path d="M9.5 13.5A4.5 4.5 0 0 1 14 9h12a4.5 4.5 0 0 1 4.5 4.5v7A4.5 4.5 0 0 1 26 25h-7l-5 4.3V25a4.5 4.5 0 0 1-4.5-4.5z" fill="#fff"/>
+    <rect x="13.5" y="15" width="2.6" height="5" rx="1.3" fill="#f0a52b"/><rect x="18.2" y="12.5" width="2.6" height="10" rx="1.3" fill="#f0a52b"/><rect x="22.9" y="14.5" width="2.6" height="6" rx="1.3" fill="#f0a52b"/>
+  </g>
+  <text x="154" y="108" font-family="Noto Sans" font-weight="700" font-size="38" fill="#08423d">Namma Saathi</text>
+
+  <!-- message -->
+  <text x="72" y="214" font-family="Noto Sans Kannada, Noto Sans Devanagari, Noto Sans" font-weight="500" font-size="26" fill="#0d6a60">Namaste · ನಮಸ್ಕಾರ · नमस्ते</text>
+  <text font-family="Noto Sans" font-weight="700" font-size="74" fill="#08423d" letter-spacing="-1.5">
+    <tspan x="72" y="306">Your personal AI</tspan>
+    <tspan x="72" y="392">for everyday life.</tspan>
+  </text>
+  <text x="72" y="456" font-family="Noto Sans" font-weight="500" font-size="31" fill="#2b3037">Tell Namma Saathi what you need. It gets it done.</text>
+
+  <!-- what it covers -->
+  <g font-family="Noto Sans" font-weight="600" font-size="22" fill="#08423d">
+    <rect x="72" y="508" width="150" height="50" rx="25" fill="#fff" stroke="#e4e0d6"/><text x="147" y="541" text-anchor="middle">Groceries</text>
+    <rect x="234" y="508" width="108" height="50" rx="25" fill="#fff" stroke="#e4e0d6"/><text x="288" y="541" text-anchor="middle">Meals</text>
+    <rect x="354" y="508" width="112" height="50" rx="25" fill="#fff" stroke="#e4e0d6"/><text x="410" y="541" text-anchor="middle">Tables</text>
+    <rect x="478" y="508" width="104" height="50" rx="25" fill="#fff" stroke="#e4e0d6"/><text x="530" y="541" text-anchor="middle">Email</text>
+    <rect x="594" y="508" width="140" height="50" rx="25" fill="#fff" stroke="#e4e0d6"/><text x="664" y="541" text-anchor="middle">Calendar</text>
+  </g>
+
+  <!-- the listening orb, as on the site -->
+  <g transform="translate(978 300)">
+    <circle r="196" fill="none" stroke="#0d6a60" stroke-opacity=".14" stroke-dasharray="4 11" stroke-width="2"/>
+    <circle r="152" fill="none" stroke="#0d6a60" stroke-opacity=".22" stroke-width="2"/>
+    <circle r="108" fill="url(#orb)"/>
+    <g fill="#fff">
+      <rect x="-66" y="-18" width="11" height="36" rx="5.5"/><rect x="-46" y="-31" width="11" height="62" rx="5.5"/><rect x="-26" y="-43" width="11" height="86" rx="5.5"/><rect x="-5.5" y="-50" width="11" height="100" rx="5.500"/><rect x="15" y="-43" width="11" height="86" rx="5.5"/><rect x="35" y="-31" width="11" height="62" rx="5.5"/><rect x="55" y="-18" width="11" height="36" rx="5.5"/>
+    </g>
+    <circle cx="0" cy="-196" r="9" fill="#f0a52b"/><circle cx="-150" cy="128" r="6" fill="#f0a52b" fill-opacity=".7"/><circle cx="140" cy="140" r="7" fill="#0d6a60" fill-opacity=".35"/>
+  </g>
+  <text x="978" y="560" text-anchor="middle" font-family="Noto Sans" font-weight="600" font-size="22" fill="#59616b">Voice-first · Kannada · Hindi · English</text>
+</svg>

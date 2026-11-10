@@ -8,12 +8,15 @@ Added after the ordering flow, for the Gnani challenge. Gmail, Calendar and What
 |---|---|---|
 | **Reminders** | Say or type "remind me to call Amma tomorrow at 7 pm" in English, Hindi or Kannada. It is saved, listed, can be ticked off or deleted. Also a form under **Reminders**. | `tests/test_personal_voice.py`, `tests/test_personal.py`, `tests/test_personal_dates.py`, `scripts/e2e_personal.py` |
 | **Notes** | Add and delete notes under **Reminders**. | `tests/test_personal.py`, `scripts/e2e_personal.py` |
-| **Waitlist** | Leave an email, with consent, on the home page. | `tests/test_waitlist.py`, `scripts/e2e_personal.py` |
+| **Waitlist** | Leave an email, with consent, on the home page, without signing in. A button in the hero leads to the form. | `tests/test_waitlist.py`, `scripts/e2e_personal.py` |
 | **Share and calendar** | After a finished demo order or booking: add to calendar (an `.ics` made in the browser), share on WhatsApp, email, copy. | `tests/test_share_ui.py`, `tests/frontend/genui.test.cjs` |
 | **Widget engine** | The server builds each widget, validates it, and the browser draws only approved types. | `tests/test_genui.py`, `tests/frontend/genui.test.cjs`, `scripts/genui_browser_check.py` |
 
 Reminders, notes and history need a signed-in account (so `DATABASE_URL` and `TOKEN_ENCRYPTION_KEYS`).
-The waitlist needs the database too and is hidden where there is none.
+The waitlist needs the database too, and both the form and the hero button are hidden where there is none.
+It allows 20 attempts an hour from one address and 1000 for the whole site, refuses cross-site
+requests, and silently discards a submission that fills the hidden `website` field. Nothing is
+emailed on sign-up, and the page says so.
 
 ## What it honestly does not do
 

@@ -17,6 +17,8 @@
     ["hi-IN", "Hindi"],
     ["kn-IN", "Kannada"],
   ];
+  // The same shape the server checks, so a typo is caught before the request.
+  var EMAIL = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
 
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -27,24 +29,42 @@
     return node;
   }
 
-  var root = el("section", { class: "waitlist", "aria-labelledby": "wl-title" });
-  root.appendChild(el("h2", { id: "wl-title" }, "Join the waitlist"));
-  root.appendChild(el("p", {}, "Get an email when live ordering opens."));
-  var form = el("form", { novalidate: "" });
+  var root = el("div", { class: "waitlist" });
+  var form = el("form", { novalidate: "", "aria-labelledby": "waitlist-heading" });
 
   var emailWrap = el("div");
-  emailWrap.appendChild(el("label", { for: "wl-email" }, "Email"));
+  emailWrap.appendChild(el("label", { for: "wl-email" }, "Your email"));
   var email = el("input", {
     id: "wl-email",
     type: "email",
     name: "email",
     autocomplete: "email",
+    inputmode: "email",
+    autocapitalize: "none",
+    spellcheck: "false",
+    placeholder: "you@example.com",
     maxlength: "254",
     required: "",
+    "aria-describedby": "wl-status",
   });
   emailWrap.appendChild(email);
   form.appendChild(emailWrap);
 
+  // Left empty by people. Anything that fills it is not saved.
+  var trapWrap = el("div", { class: "wl-hp", "aria-hidden": "true" });
+  trapWrap.appendChild(el("label", { for: "wl-website" }, "Leave this empty"));
+  var trap = el("input", {
+    id: "wl-website",
+    type: "text",
+    name: "website",
+    tabindex: "-1",
+    autocomplete: "off",
+  });
+  trapWrap.appendChild(trap);
+  form.appendChild(trapWrap);
+
+  var more = el("details");
+  more.appendChild(el("summary", {}, "Tell me more (optional)"));
   var fieldset = el("fieldset");
   fieldset.appendChild(el("legend", {}, "What are you interested in?"));
   var boxes = INTERESTS.map(function (pair) {
@@ -55,16 +75,16 @@
     fieldset.appendChild(label);
     return box;
   });
-  form.appendChild(fieldset);
-
+  more.appendChild(fieldset);
   var langWrap = el("div");
-  langWrap.appendChild(el("label", { for: "wl-language" }, "Language"));
+  langWrap.appendChild(el("label", { for: "wl-language" }, "Language you would speak"));
   var language = el("select", { id: "wl-language", name: "language" });
   LANGUAGES.forEach(function (pair) {
     language.appendChild(el("option", { value: pair[0] }, pair[1]));
   });
   langWrap.appendChild(language);
-  form.appendChild(langWrap);
+  more.appendChild(langWrap);
+  form.appendChild(more);
 
   var consentLabel = el("label", { class: "wl-check", for: "wl-consent" });
   var consent = el("input", { id: "wl-consent", type: "checkbox", required: "" });
@@ -74,9 +94,9 @@
   consentLabel.appendChild(consentText);
   form.appendChild(consentLabel);
 
-  var button = el("button", { type: "submit" }, "Join the list");
+  var button = el("button", { type: "submit" }, "Join the waitlist");
   form.appendChild(button);
-  var status = el("p", { class: "wl-status", role: "status", "aria-live": "polite" });
+  var status = el("p", { id: "wl-status", class: "wl-status", role: "status", "aria-live": "polite" });
   form.appendChild(status);
   root.appendChild(form);
   mount.appendChild(root);
@@ -84,18 +104,31 @@
   function say(message, isError) {
     status.textContent = message;
     status.className = "wl-status" + (isError ? " wl-error" : "");
+    if (isError) email.setAttribute("aria-invalid", "true");
+    else email.removeAttribute("aria-invalid");
+  }
+
+  // The form is replaced, so the result cannot be missed or sent twice.
+  function done(title, detail) {
+    var box = el("div", { class: "wl-done", role: "status", tabindex: "-1" });
+    box.appendChild(el("strong", {}, title));
+    box.appendChild(el("p", {}, detail));
+    root.replaceChildren(box);
+    box.focus();
   }
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
+    if (button.disabled) return;
     var address = email.value.trim();
-    if (!address || address.indexOf("@") < 1 || /\s/.test(address)) {
-      say("Please enter a valid email address.", true);
+    if (!EMAIL.test(address)) {
+      say("Please enter a valid email address, like you@example.com.", true);
       email.focus();
       return;
     }
     if (!consent.checked) {
-      say("Please tick the box to join the list.", true);
+      status.textContent = "Please tick the box to join the list.";
+      status.className = "wl-status wl-error";
       consent.focus();
       return;
     }
@@ -107,7 +140,8 @@
         return b.value;
       });
     button.disabled = true;
-    say("Sending...", false);
+    button.textContent = "Joining...";
+    say("", false);
     fetch("/api/waitlist", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -116,6 +150,7 @@
         interests: interests,
         language: language.value,
         consent: true,
+        website: trap.value,
       }),
     })
       .then(function (response) {
@@ -126,12 +161,20 @@
           })
           .then(function (data) {
             if (response.ok && data.status === "joined") {
-              say("You're on the list.", false);
-              form.reset();
+              done(
+                "You're on the list.",
+                "I'll email " + address + " when live ordering opens. " +
+                  "There is no confirmation email, so nothing to look for in your inbox today.",
+              );
             } else if (response.ok && data.status === "already_listed") {
-              say("This email is already on the list.", false);
+              done(
+                "You're already on the list.",
+                address + " was added earlier. I'll email you when live ordering opens.",
+              );
             } else if (response.status === 429) {
-              say("Too many tries. Please try again later.", true);
+              say("Too many tries just now. Please try again in a while.", true);
+            } else if (response.status === 404) {
+              say("The waitlist is not open on this server.", true);
             } else {
               say(
                 typeof data.detail === "string"
@@ -143,10 +186,11 @@
           });
       })
       .catch(function () {
-        say("Could not reach the server. Please try again.", true);
+        say("Could not reach the server. Please check your connection and try again.", true);
       })
       .then(function () {
         button.disabled = false;
+        button.textContent = "Join the waitlist";
       });
   });
 })();

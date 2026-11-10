@@ -1,17 +1,24 @@
-.waitlist { max-width: 32rem; margin: 1.5rem auto; padding: 1.25rem 1rem; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; color: var(--ink); }
-.waitlist h2 { margin: 0 0 .25rem; font-size: 1.15rem; }
-.waitlist p { margin: 0 0 .75rem; color: var(--muted); }
+.waitlist { color: var(--ink); }
 .waitlist form { display: grid; gap: .85rem; }
 .waitlist label { display: block; font-weight: 600; margin-bottom: .25rem; }
-.waitlist input[type="email"], .waitlist select { width: 100%; box-sizing: border-box; min-height: 44px; padding: .5rem .65rem; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
-.waitlist fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0; padding: .5rem .75rem; }
-.waitlist legend { font-weight: 600; padding: 0 .25rem; }
-.waitlist .wl-check { display: flex; align-items: flex-start; gap: .6rem; min-height: 44px; padding: .25rem 0; font-weight: 400; margin: 0; }
+.waitlist input[type="email"], .waitlist select { width: 100%; box-sizing: border-box; min-height: 48px; padding: .5rem .75rem; font: inherit; font-size: 1rem; color: var(--ink); background: var(--paper); border: 1px solid var(--line-strong); border-radius: 10px; }
+.waitlist input[type="email"][aria-invalid="true"] { border-color: var(--brick); }
+.waitlist details { border: 1px solid var(--line); border-radius: 10px; padding: .15rem .75rem; }
+.waitlist summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--muted); font-weight: 600; font-size: .92rem; }
+.waitlist details[open] { padding-bottom: .75rem; }
+.waitlist fieldset { border: 0; margin: 0 0 .5rem; padding: 0; }
+.waitlist legend { font-weight: 600; padding: 0; margin-bottom: .15rem; }
+.waitlist .wl-check { display: flex; align-items: flex-start; gap: .6rem; min-height: 44px; padding: .25rem 0; font-weight: 400; margin: 0; color: var(--ink-2); font-size: .92rem; }
 .waitlist .wl-check input { flex: none; width: 1.25rem; height: 1.25rem; margin-top: .15rem; accent-color: var(--teal); }
-.waitlist button { min-height: 44px; padding: .55rem 1.1rem; font: inherit; font-weight: 700; color: #fff; background: var(--teal); border: 0; border-radius: 999px; cursor: pointer; }
+.waitlist .wl-check a { color: var(--teal); font-weight: 600; }
+.waitlist button { min-height: 52px; padding: .55rem 1.4rem; font-family: var(--display); font-size: 1.12rem; font-weight: 700; color: #fff; background: var(--teal); border: 0; border-radius: 999px; cursor: pointer; }
 .waitlist button:hover:not(:disabled) { background: var(--teal-dark); }
 .waitlist button:disabled { opacity: .6; cursor: progress; }
 .waitlist :focus-visible { outline: 3px solid var(--marigold); outline-offset: 2px; }
 .waitlist .wl-status { min-height: 1.4em; margin: 0; font-weight: 600; color: var(--teal); }
 .waitlist .wl-status.wl-error { color: var(--brick); }
-@media (max-width: 400px) { .waitlist { margin: 1rem 0; border-radius: 0; } }
+.waitlist .wl-done { padding: 1rem 1.1rem; border-radius: 14px; background: var(--green-tint); color: var(--ink); }
+.waitlist .wl-done strong { display: block; margin-bottom: .25rem; font-family: var(--display); font-size: 1.3rem; color: var(--green); }
+.waitlist .wl-done p { margin: 0; color: var(--ink-2); }
+/* Honeypot: people never see or reach it; a script that fills every field does. */
+.waitlist .wl-hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }

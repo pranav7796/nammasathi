@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#fbf4e6">
     <title>Namma Saathi — your personal AI for everyday life</title>
+    <meta name="description" content="Namma Saathi is a voice-first AI assistant for everyday tasks: groceries, meals, tables, email and your calendar, in Kannada, Hindi and English. Try the demo and join the waitlist.">
+    <link rel="canonical" href="{{base_url}}/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Namma Saathi">
+    <meta property="og:title" content="Namma Saathi — your personal AI for everyday life">
+    <meta property="og:description" content="Tell Namma Saathi what you need. It gets it done. A voice-first assistant in Kannada, Hindi and English. Try the demo and join the waitlist.">
+    <meta property="og:url" content="{{base_url}}/">
+    <meta property="og:image" content="{{base_url}}/static/og.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Namma Saathi: your personal AI for everyday life. Tell Namma Saathi what you need. It gets it done.">
+    <meta name="twitter:card" content="summary_large_image">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -82,8 +95,10 @@
             </svg>
           </div>
           <p class="greeting">Namaste · ನಮಸ್ಕಾರ · नमस्ते</p>
-          <h2 id="start-heading">Just say what you need.</h2>
-          <p class="welcome-copy">I'll help get it done, and nothing happens until you've heard the details and said yes.</p>
+          <h1 id="start-heading">Your personal AI for everyday life.</h1>
+          <p class="hero-tagline">Tell Namma Saathi what you need. It gets it done.</p>
+          <p class="welcome-copy">A voice-first assistant for groceries, meals, tables, email and your calendar, in Kannada, Hindi and English. Nothing happens until you've heard the details and said yes.</p>
+          <p id="hero-cta" class="hero-cta" hidden><a class="cta-primary" href="#waitlist">Join the waitlist</a><span class="cta-note">Free. An email when live ordering opens.</span></p>
           <ul class="capabilities" role="group" aria-label="What would you like to try?">
             <li><button type="button" class="cap" data-cap="grocery" aria-pressed="true"><svg aria-hidden="true"><use href="#icon-basket"/></svg>Groceries</button></li>
             <li><button type="button" class="cap" data-cap="meal" aria-pressed="false"><svg aria-hidden="true"><use href="#icon-meal"/></svg>A meal</button></li>
@@ -130,11 +145,53 @@
         </div>
       </section>
 
+      <section id="features" class="landing-section" aria-labelledby="features-heading">
+        <p class="eyebrow">What Saathi does</p>
+        <h2 id="features-heading">One voice for the everyday errands.</h2>
+        <ul class="feature-grid">
+          <li class="feature">
+            <svg class="i" aria-hidden="true"><use href="#icon-mic"/></svg>
+            <h3>Speak your language</h3>
+            <p>Talk in Kannada, Hindi or English, the way you would to a person. Saathi listens with Gnani Prisma and answers aloud with Gnani Timbre.</p>
+            <p class="feature-status is-open">In the demo today</p>
+          </li>
+          <li class="feature">
+            <svg class="i" aria-hidden="true"><use href="#icon-bag"/></svg>
+            <h3>Groceries, a meal, a table</h3>
+            <p>Ask for groceries, a meal or a restaurant table. Saathi is built to order through Swiggy, and reads back every item, price and total before it asks for your yes.</p>
+            <p class="feature-status">Demo shops today. Real ordering by invitation.</p>
+          </li>
+          <li class="feature">
+            <svg class="i" aria-hidden="true"><use href="#icon-mail"/></svg>
+            <h3>Gmail</h3>
+            <p>Find the email that matters, hear what needs a reply, and draft one by voice. Nothing is sent until you approve the exact message.</p>
+            <p class="feature-status">Early access</p>
+          </li>
+          <li class="feature">
+            <svg class="i" aria-hidden="true"><use href="#icon-calendar"/></svg>
+            <h3>Google Calendar</h3>
+            <p>Hear today's schedule, check when you're free, and set up or move a meeting once you've confirmed the details.</p>
+            <p class="feature-status">Early access</p>
+          </li>
+        </ul>
+        <ol class="steps" aria-label="How every task works">
+          <li><strong>Say it.</strong> Ask in your own words.</li>
+          <li><strong>Hear it back.</strong> Saathi repeats exactly what it will do.</li>
+          <li><strong>Say yes.</strong> Only then does anything happen.</li>
+        </ol>
+      </section>
+
       <section id="waitlist" class="waitlist-section" aria-labelledby="waitlist-heading" hidden>
-        <h2 id="waitlist-heading">Want the real thing?</h2>
+        <p class="eyebrow">Waitlist</p>
+        <h2 id="waitlist-heading">Be first when Saathi goes live.</h2>
         <p>Today Saathi practises on demo shops. Real Swiggy ordering opens once Swiggy approves it. Leave your email and I'll tell you when it's ready.</p>
         <div id="waitlist-mount"></div>
       </section>
+
+      <footer class="site-footer">
+        <p>Namma Saathi · Voice by Gnani Prisma and Gnani Timbre · <a href="/privacy">Privacy</a></p>
+        <p>An independent project. Not affiliated with or endorsed by Swiggy or Google.</p>
+      </footer>
 
       <section id="conversation" class="conversation" data-ctx="welcome" aria-label="Your conversation with Saathi" hidden>
         <section id="tasks-panel" class="tasks-panel" aria-label="What Saathi is holding for you" hidden>

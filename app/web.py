@@ -23,7 +23,7 @@ import httpx
 import psycopg
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from psycopg_pool import PoolTimeout
 from pydantic import BaseModel
@@ -646,8 +646,11 @@ def create_app(
         )
 
     @application.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    async def index(request: Request) -> HTMLResponse:
+        # Link previews (LinkedIn, WhatsApp) need absolute addresses for the page and its image.
+        base = _get_settings(request).public_base_url or str(request.base_url)
+        page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        return HTMLResponse(page.replace("{{base_url}}", html.escape(base.rstrip("/"))))
 
     @application.get("/privacy", include_in_schema=False)
     async def privacy(request: Request) -> HTMLResponse:

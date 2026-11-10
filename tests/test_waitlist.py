@@ -14,7 +14,7 @@ import pytest
 from app.accounts.service import UNAVAILABLE_MESSAGE, AccountService
 from app.accounts_admin import run
 from app.config import Settings
-from app.waitlist import CONSENT_TEXT, waitlist_router
+from app.waitlist import CONSENT_TEXT, PER_ADDRESS_PER_HOUR, waitlist_router
 from tests.test_accounts import Site
 from tests.test_accounts import site as account_site
 
@@ -90,10 +90,10 @@ async def test_rate_limit_per_address(tmp_path: Path) -> None:
             (
                 await browser.post("/api/waitlist", json={**JOIN, "email": f"p{n}@example.com"})
             ).status_code
-            for n in range(6)
+            for n in range(PER_ADDRESS_PER_HOUR + 1)
         ]
-        assert codes == [200] * 5 + [429]
-        assert len(_rows(s.service)) == 5
+        assert codes == [200] * PER_ADDRESS_PER_HOUR + [429]
+        assert len(_rows(s.service)) == PER_ADDRESS_PER_HOUR
 
 
 async def test_unavailable_database_is_a_503(tmp_path: Path) -> None:
@@ -137,6 +137,38 @@ async def test_admin_list_csv_and_remove(
     capsys.readouterr()
     command("waitlist", csv=False)
     assert "0 on the waitlist" in capsys.readouterr().out
+
+
+async def test_a_filled_hidden_field_stores_nothing(tmp_path: Path) -> None:
+    """A script that fills every field is told it worked, and nothing is kept."""
+    async with site(tmp_path) as s, s.browser() as browser:
+        response = await browser.post("/api/waitlist", json={**JOIN, "website": "http://spam.test"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "joined"}
+        assert _rows(s.service) == []
+        real = await browser.post("/api/waitlist", json={**JOIN, "website": ""})
+        assert real.json() == {"status": "joined"}
+        assert len(_rows(s.service)) == 1
+
+
+async def test_the_page_carries_a_link_preview_and_a_way_to_the_form(tmp_path: Path) -> None:
+    """LinkedIn reads these tags without running scripts, and needs absolute addresses."""
+    async with site(tmp_path) as s, s.browser() as browser:
+        response = await browser.get("/")
+        assert response.status_code == 200
+        page = response.text
+        assert "{{base_url}}" not in page
+        base = str(browser.base_url).rstrip("/")
+        assert f'<meta property="og:image" content="{base}/static/og.png">' in page
+        assert f'<meta property="og:url" content="{base}/">' in page
+        assert '<meta property="og:title" content="Namma Saathi' in page
+        assert '<meta name="description" content="' in page
+        assert page.count("<h1") == 1
+        assert 'href="#waitlist"' in page and 'id="waitlist-mount"' in page
+        image = await browser.get("/static/og.png")
+        assert image.status_code == 200
+        assert image.headers["content-type"] == "image/png"
+        assert image.content[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 async def test_the_form_script_only_uses_text_content() -> None:

@@ -74,6 +74,20 @@ Use a Neon branch and a second Render service, so tests never touch real users' 
 Its address will differ from production, so Swiggy would need it allowlisted separately before it
 can test live sign-in. Until then it is a place to try changes before they reach `main`.
 
+## Sharing the link
+
+The home page carries a description and Open Graph tags, with absolute addresses built from
+`PUBLIC_BASE_URL` (on Render, `RENDER_EXTERNAL_URL`). The preview image is `app/static/og.png`,
+rendered from `scripts/og-image.svg`:
+
+```bash
+rsvg-convert -w 1200 -h 630 scripts/og-image.svg -o app/static/og.png
+```
+
+LinkedIn caches a preview for about a week. After a deploy, paste the address into
+<https://www.linkedin.com/post-inspector/> to refresh it before posting. Open the site yourself
+just before posting too: a sleeping free service takes most of a minute to answer its first visitor.
+
 ## What a visitor can spend
 
 Each turn uses real speech and LLM quota. Visitors without an account share

@@ -186,6 +186,8 @@
     accountButton.hidden = !me.enabled;
     const waitlist = document.querySelector("#waitlist");
     if (waitlist) waitlist.hidden = !me.enabled || me.available === false;
+    const heroCta = document.querySelector("#hero-cta");
+    if (heroCta) heroCta.hidden = !me.enabled || me.available === false;
     accountsNotice.hidden = me.available !== false;
     accountsNotice.textContent = me.message || "";
     if (!me.enabled || me.available === false) {

@@ -24,8 +24,9 @@ CONSENT_TEXT = (
     "Tell me by email when live ordering opens. I can ask you to remove my email at any time."
 )
 MAX_ENTRIES = 20_000
-PER_ADDRESS_PER_HOUR = 5
-PER_HOUR = 300
+# One address is often a whole office, campus, or mobile carrier, so this matches account sign-ups.
+PER_ADDRESS_PER_HOUR = 20
+PER_HOUR = 1000  # for the whole site: bounds abuse even if an address is forged
 WINDOW_SECONDS = 60 * 60
 _MAX_TRACKED = 20_000
 _EMAIL = re.compile(
@@ -44,6 +45,8 @@ class WaitlistRequest(BaseModel):
     interests: list[Interest] = Field(default_factory=list[Interest], max_length=5)
     language: Language = "en-IN"
     consent: bool = False
+    # A field no person sees or fills. See the form in static/waitlist.js.
+    website: str = Field(default="", max_length=200)
 
 
 def clean_email(raw: str) -> str | None:
@@ -136,6 +139,10 @@ def waitlist_router(accounts: AccountService | None = None) -> APIRouter:
         if not limiter.allow(address):
             log_event("waitlist", outcome="rate_limited")
             raise HTTPException(status_code=429, detail=BUSY_MESSAGE)
+        if body.website.strip():
+            # A script filled the hidden field. Answer as if it worked, and store nothing.
+            log_event("waitlist", outcome="discarded")
+            return {"status": "joined"}
         if not body.consent:
             raise HTTPException(status_code=400, detail="Please tick the box to join the list.")
         email = clean_email(body.email)
