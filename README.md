@@ -3,6 +3,8 @@
 **Your personal AI for everyday life.** Say what you need in Kannada, Hindi, or English, and Saathi
 helps get it done.
 
+**[One-page solution pitch](PITCH.md)** · **[Live demo](https://namma-saathi-7b62.onrender.com)**
+
 One conversation, three everyday tasks:
 
 | Task | You say | Service |
